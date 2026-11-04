@@ -11,6 +11,7 @@ substitutions:
   _STORAGE_BOOT_UPLOAD_PATH: ''
   _USE_WINRE: 'true'
   _REFRESH_WINRE: 'true'
+  _TAGS: 'windows-builder'
 steps:
 - name: 'gcr.io/$PROJECT_ID/windows-builder'
   args: [ '--network', '$_NETWORK',
@@ -21,5 +22,6 @@ steps:
           '--machineType', '$_MACHINETYPE',
           '--diskSizeGb', '150',
           '--serviceAccount', '$_SERVICEACCOUNT',
+          '--tags', '$_TAGS',
           '--command', 'powershell.exe -File tools/bootstrap_winpe.ps1 -config_server "$_CONFIG_SERVER" -storage_upload_path "$_STORAGE_UPLOAD_PATH" -storage_boot_upload_path "$_STORAGE_BOOT_UPLOAD_PATH" -use_winre "$_USE_WINRE" -refresh_winre "$_REFRESH_WINRE"' ]
 timeout: 5400s
