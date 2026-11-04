@@ -1,15 +1,41 @@
-# Network Booting
+# UEFI Network Booting (Secure Boot Enabled)
 
-In a controlled network environment, UEFI network booting is possible.
+In a controlled network environment, UEFI network booting is possible with Microsoft Secure Boot enabled.
 
-`iPXE` and `wimboot` are required to load up into `WinPE`.
+`iPXE` and `wimboot` are used to load the Glazier `WinPE` image over HTTP/HTTPS.
 
-`wimboot` is already Secure Boot signed & capable, but `iPXE` is not.
+## Upstream iPXE Secure Boot Signing
 
-[2Pint iPXE Anywhere](https://2pintsoftware.com/products/ipxeanywhere/) is a version of iPXE signed by Microsoft for Secure Boot.
+Historically, booting iPXE under Secure Boot required third-party signed binaries such as 2Pint iPXE Anywhere. Upstream [iPXE](https://ipxe.org) now provides official signed Secure Boot binaries (`x86_64-sb`) via GitHub releases:
 
-It has an embedded script, but it can still be used with the correct DHCP options and files, see:
+- **shimx64.efi**: Microsoft UEFI CA signed shim bootloader.
+- **snponly.efi**: Standard UEFI Simple Network Protocol driver.
+- **ipxe.efi**: Full iPXE binary with native network drivers.
+- **wimboot**: Official Secure Boot signed bootloader for booting Windows PE from RAM.
 
-https://gist.github.com/iamacarpet/d37c17bcaf8767093a53265ed4d04b83
+The `glazier-repo/update-netboot.sh` script automatically downloads and prepares these official upstream binaries, generates a bootable USB image (`usb/glazier-ipxe-x86_64-sb.usb`), and configures the `autoexec.ipxe` loader.
 
-And example iPXE boot script can be found [here](Boot.ipxe).
+## Custom Splash Screen (logo.png) Specifications
+
+If you wish to display a custom branding splash screen during iPXE boot:
+
+- **File Name**: `logo.png` placed in the `glazier-repo/` directory.
+- **Resolution**: `1024x768` (standard VESA mode supported across UEFI firmwares) or `800x600`.
+- **Color Depth / Format**: **8-bit Indexed PNG (colormap palette)**, non-interlaced, 256 colors maximum.
+- **Why this format matters**: iPXE uses a minimalist embedded PNG decoder. 24-bit/32-bit truecolor or interlaced PNGs can cause memory allocation errors or fail to render in early UEFI video modes.
+- **Tooling to generate compatible PNGs**:
+  ```bash
+  # Using ImageMagick:
+  convert input.png -resize 1024x768\! -colors 256 -type Palette png8:logo.png
+  
+  # Using pngquant:
+  pngquant 256 --strip input.png -o logo.png
+  ```
+- **Embedding**: When `logo.png` is present, `glazier-repo/update-netboot.sh` automatically encodes it into Base64 and embeds it inline into `autoexec.ipxe`, as well as copying it to the root of the USB boot image. If omitted, a clean text console is used.
+
+## Configuration & Boot Files
+
+- **`glazier-repo/netboot.env.example`**: Example environment file for `update-netboot.sh`. Copy to `glazier-repo/netboot.env` (gitignored) to set your bucket endpoints.
+- **`tools/iPXE/Boot.ipxe`**: Example iPXE boot menu template. Replace `CHANGE_ME` with your Cloud Storage bucket URL.
+- **`glazier-repo/update-netboot.sh`**: Helper script to fetch latest upstream iPXE/wimboot releases and configure the netboot environment.
+- **DHCP Option 67 / Boot File**: Set to `shimx64.efi` for UEFI clients.

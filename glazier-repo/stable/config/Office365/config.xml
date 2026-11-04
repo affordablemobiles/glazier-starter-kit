@@ -1,11 +1,13 @@
 <Configuration>
-<Add OfficeClientEdition="64" Channel="Current">
-<Product ID="O365ProPlusRetail">
-<Language ID="en-us"/>
-<ExcludeApp ID="Groove"/>
-<ExcludeApp ID="Lync"/>
-</Product>
-</Add>
-<Updates Enabled="TRUE" Channel="Current"/>
-<Display Level="Full" AcceptEULA="TRUE"/>
+  <Add OfficeClientEdition="64" Channel="Current">
+    <Product ID="O365ProPlusRetail">
+      <Language ID="MatchOS"/>
+      <Language ID="en-gb"/>
+      <ExcludeApp ID="Groove"/>
+      <ExcludeApp ID="Lync"/>
+    </Product>
+  </Add>
+  <Updates Enabled="TRUE" Channel="Current"/>
+  <Display Level="Full" AcceptEULA="TRUE"/>
+  <Property Name="FORCEAPPSHUTDOWN" Value="TRUE"/>
 </Configuration>

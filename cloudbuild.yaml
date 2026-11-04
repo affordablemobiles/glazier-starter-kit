@@ -3,11 +3,14 @@ substitutions:
   _SUBNETWORK: 'default'
   _REGION: 'europe-west1'
   _ZONE: 'europe-west1-d'
-  _IMAGE: 'windows-cloud/global/images/windows-server-2022-dc-v20240313'
+  _IMAGE: 'windows-cloud/global/images/family/windows-2025'
   _MACHINETYPE: 'e2-standard-4'
   _SERVICEACCOUNT: ''
+  _CONFIG_SERVER: ''
   _STORAGE_UPLOAD_PATH: ''
   _STORAGE_BOOT_UPLOAD_PATH: ''
+  _USE_WINRE: 'true'
+  _REFRESH_WINRE: 'true'
 steps:
 - name: 'gcr.io/$PROJECT_ID/windows-builder'
   args: [ '--network', '$_NETWORK',
@@ -18,5 +21,5 @@ steps:
           '--machineType', '$_MACHINETYPE',
           '--diskSizeGb', '150',
           '--serviceAccount', '$_SERVICEACCOUNT',
-          '--command', 'powershell.exe -File tools/bootstrap_winpe.ps1 -config_server $_CONFIG_SERVER -storage_upload_path $_STORAGE_UPLOAD_PATH -storage_boot_upload_path $_STORAGE_BOOT_UPLOAD_PATH' ]
-timeout: 3600s
+          '--command', 'powershell.exe -File tools/bootstrap_winpe.ps1 -config_server "$_CONFIG_SERVER" -storage_upload_path "$_STORAGE_UPLOAD_PATH" -storage_boot_upload_path "$_STORAGE_BOOT_UPLOAD_PATH" -use_winre "$_USE_WINRE" -refresh_winre "$_REFRESH_WINRE"' ]
+timeout: 5400s

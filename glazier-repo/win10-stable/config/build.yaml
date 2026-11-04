@@ -1,6 +1,6 @@
 templates:
   osdcloud:
-    PSCommand: ['Start-OSDCloud -Firmware -SkipAutopilot -SkipODT -ZTI -OSVersion "Windows 10" -OSBuild "21H2" -OSEdition "Pro" -OSLanguage "en-gb" -OSLicense "Retail"']
+    PSCommand: ['Start-OSDCloud -Firmware -SkipAutopilot -SkipODT -ZTI -OSVersion "Windows 10" -OSBuild "22H2" -OSEdition "Pro" -OSLanguage "en-gb" -OSLicense "Retail"']
 
 controls:
 - SetTimer: ['winpe_start']
@@ -19,17 +19,23 @@ controls:
 - PSCommand: ['& X:\Windows\System32\bcdboot.exe C:\Windows /c /v']
 
 #################################################################################################
+# Pre-install cumulative updates (October 2026 KB5134125)                                       #
+#################################################################################################
+
+- UpdateMSU:
+  - ['https://catalog.s.download.windowsupdate.com/c/msdownload/update/software/updt/2026/10/windows10.0-kb5134125-x64_938ad1b5ef48df6483c2b7beecd02e62d61e5dc4.msu', 'C:\glazier_cache\kb5134125.msu', 'c8c4d65e7ea52afe905a33646de3432beb22d01817452b33d4b43d9a04ac3ca3']
+
+#################################################################################################
 # Prepare MGMT & unattend config                                                                #
 #################################################################################################
 
 - pull:
   - ['unattend.xml', 'C:\Windows\Panther\Invoke-OSDSpecialize.xml']
 
-- Execute: [
-  ['C:\Windows\System32\reg.exe load HKLM\TempSYSTEM C:\Windows\System32\Config\SYSTEM'],
-  ['C:\Windows\System32\reg.exe add HKLM\TempSYSTEM\Setup /v UnattendFile /d C:\Windows\Panther\Invoke-OSDSpecialize.xml /f'],
-  ['C:\Windows\System32\reg.exe unload HKLM\TempSYSTEM'],
-]
+- Execute:
+  - ['C:\Windows\System32\reg.exe load HKLM\TempSYSTEM C:\Windows\System32\Config\SYSTEM']
+  - ['C:\Windows\System32\reg.exe add HKLM\TempSYSTEM\Setup /v UnattendFile /d C:\Windows\Panther\Invoke-OSDSpecialize.xml /f']
+  - ['C:\Windows\System32\reg.exe unload HKLM\TempSYSTEM']
 
 - MkDir: ['C:\MGMT']
 - MkDir: ['C:\MGMT\Temp']
@@ -37,8 +43,8 @@ controls:
 
 - pull:
   - ['MGMT/mgmt-installer-amd64.exe', 'C:\MGMT\mgmt-installer-amd64.exe']
-  - ['Office365/officedeploymenttool_15128-20224.exe', 'C:\MGMT\Temp\odt_installer.exe']
-  - ['Office365/config.xml', 'C:\MGMT\Temp\odt\a1-config.xml']
+  - ['Office365/officedeploymenttool_20430-20146.exe', 'C:\MGMT\Temp\odt_installer.exe']
+  - ['Office365/config.xml', 'C:\MGMT\Temp\odt\configuration.xml']
 
 #################################################################################################
 # Copy files from WinPE to the host for later use                                               #
@@ -82,7 +88,7 @@ controls:
 
 - PSCommand: ['& C:\MGMT\Temp\odt_installer.exe /extract:C:\MGMT\Temp\odt /quiet /norestart']
 
-- PSCommand: ['& C:\MGMT\Temp\odt\setup.exe /configure C:\MGMT\Temp\odt\a1-config.xml']
+- PSCommand: ['& C:\MGMT\Temp\odt\setup.exe /configure C:\MGMT\Temp\odt\configuration.xml']
 
 - PSCommand: ['& C:\MGMT\mgmt-installer-amd64.exe']
 

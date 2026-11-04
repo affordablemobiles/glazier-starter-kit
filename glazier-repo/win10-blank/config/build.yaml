@@ -1,6 +1,6 @@
 templates:
   osdcloud:
-    PSCommand: ['Start-OSDCloud -Firmware -SkipAutopilot -SkipODT -ZTI -OSVersion "Windows 10" -OSBuild "21H2" -OSEdition "Pro" -OSLanguage "en-gb" -OSLicense "Retail"']
+    PSCommand: ['Start-OSDCloud -Firmware -SkipAutopilot -SkipODT -ZTI -OSVersion "Windows 10" -OSBuild "22H2" -OSEdition "Pro" -OSLanguage "en-gb" -OSLicense "Retail"']
 
 controls:
 - SetTimer: ['winpe_start']
@@ -17,6 +17,13 @@ controls:
 #################################################################################################
 
 - PSCommand: ['& X:\Windows\System32\bcdboot.exe C:\Windows /c /v']
+
+#################################################################################################
+# Pre-install cumulative updates (October 2026 KB5134125)                                       #
+#################################################################################################
+
+- UpdateMSU:
+  - ['https://catalog.s.download.windowsupdate.com/c/msdownload/update/software/updt/2026/10/windows10.0-kb5134125-x64_938ad1b5ef48df6483c2b7beecd02e62d61e5dc4.msu', 'C:\glazier_cache\kb5134125.msu', 'c8c4d65e7ea52afe905a33646de3432beb22d01817452b33d4b43d9a04ac3ca3']
 
 #################################################################################################
 # Copy files from WinPE to the host for later use                                               #

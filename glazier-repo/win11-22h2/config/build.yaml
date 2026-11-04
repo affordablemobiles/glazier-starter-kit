@@ -1,6 +1,6 @@
 templates:
   osdcloud:
-    PSCommand: ['Start-OSDCloud -Firmware -SkipAutopilot -SkipODT -ZTI -ImageFileUrl "https://storage.googleapis.com/a1comms-mgmt-deployment-files/Windows11_InsiderPreview_Client_x64_en-us_22621/sources/install.wim" -ImageIndex 6']
+    PSCommand: ['Start-OSDCloud -Firmware -SkipAutopilot -SkipODT -ZTI -ImageFileUrl "https://storage.googleapis.com/CHANGE_ME/Windows11_InsiderPreview_Client_x64_en-us_22621/sources/install.wim" -ImageIndex 6']
 
 controls:
 - SetTimer: ['winpe_start']
@@ -32,7 +32,7 @@ controls:
 - pull:
   - ['MGMT/mgmt-installer-amd64.exe', 'C:\MGMT\mgmt-installer-amd64.exe']
   - ['Office365/officedeploymenttool_15128-20224.exe', 'C:\MGMT\Temp\odt_installer.exe']
-  - ['Office365/config.xml', 'C:\MGMT\Temp\odt\a1-config.xml']
+  - ['Office365/config.xml', 'C:\MGMT\Temp\odt\configuration.xml']
 
 
 #################################################################################################
@@ -77,7 +77,7 @@ controls:
 
 - PSCommand: ['& C:\MGMT\Temp\odt_installer.exe /extract:C:\MGMT\Temp\odt /quiet /norestart']
 
-- PSCommand: ['& C:\MGMT\Temp\odt\setup.exe /configure C:\MGMT\Temp\odt\a1-config.xml']
+- PSCommand: ['& C:\MGMT\Temp\odt\setup.exe /configure C:\MGMT\Temp\odt\configuration.xml']
 
 - PSCommand: ['& C:\MGMT\mgmt-installer-amd64.exe']
 

@@ -9,7 +9,7 @@ isset ${menu-default} || set menu-default exit
 ###################### MAIN MENU ####################################
 
 :start
-menu iPXE boot menu for A1 Comms Ltd
+menu iPXE boot menu for Glazier
 item --gap --               ---------------------  Glazier Images with MGMT --------------------------
 item --key s windows-stable Run Glazier with windows-stable (Windows 11 Pro) configuration
 item --key d win10-stable   Run Glazier with win10-stable (Windows 10 Pro) configuration

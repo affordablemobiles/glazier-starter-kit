@@ -11,3 +11,18 @@ AutopilotConfigurationFile.json
 /glazier
 /glazier-repo/yappl/Boot
 /glazier-repo/stable/config/VPN
+
+# Netboot binaries and generated files
+/glazier-repo/*.efi
+/glazier-repo/wimboot
+/glazier-repo/wimboot.*
+/glazier-repo/*.ipxe
+/glazier-repo/logo.png
+/glazier-repo/usb/
+*.usb
+
+# Local environment configuration
+/glazier-repo/netboot.env
+/glazier-repo/.env
+*.env
+!*.env.example

@@ -1,6 +1,6 @@
 templates:
   osdcloud:
-    PSCommand: ['Start-OSDCloud -Firmware -SkipAutopilot -SkipODT -ZTI -OSVersion "Windows 11" -OSBuild "23H2" -OSEdition "Pro" -OSLanguage "en-gb" -OSLicense "Retail"']
+    PSCommand: ['Start-OSDCloud -Firmware -SkipAutopilot -SkipODT -ZTI -OSVersion "Windows 11" -OSBuild "25H2" -OSEdition "Pro" -OSLanguage "en-gb" -OSLicense "Retail"']
 
 controls:
 - SetTimer: ['winpe_start']
@@ -19,11 +19,12 @@ controls:
 - PSCommand: ['& X:\Windows\System32\bcdboot.exe C:\Windows /c /v']
 
 #################################################################################################
-# Pre-install the March 2024 cumulative update (kb5035942)                                      #
+# Pre-install cumulative updates (KB5043080 checkpoint + October 2026 KB5134133)                #
 #################################################################################################
 
 - UpdateMSU:
-  - ['https://catalog.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/396ddabf-b27a-451e-a898-31d0427a36f7/public/windows11.0-kb5035942-x64_3f37174fadabd9d29ffe92a92b3422557586f645.msu', 'C:\glazier_cache\kb5035942.msu', '5dc9c13a8ad0e940ce689e39018f5eec81fce5301b8c12c5c7198e85f3cbbb6a']
+  - ['https://catalog.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/d8b7f92b-bd35-4b4c-96e5-46ce984b31e0/public/windows11.0-kb5043080-x64_953449672073f8fb99badb4cc6d5d7849b9c83e8.msu', 'C:\glazier_cache\kb5043080.msu', '819632610a101af11c72907fb13ff05b5fb4222c0e263ee9a03bcc1d1d5f26a4']
+  - ['https://catalog.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/4d03ecda-f542-4c31-a4dc-a74fe3ce721f/public/windows11.0-kb5134133-x64_0e59d2f988a5422dfb489e97faed3b3835fc7568.msu', 'C:\glazier_cache\kb5134133.msu', 'cdd9d082a87c131f2ecff346717e163c23d3dadc323fa8faed00826d8e135872']
 
 #################################################################################################
 # Prepare MGMT & unattend config                                                                #
@@ -32,22 +33,20 @@ controls:
 - pull:
   - ['unattend.xml', 'C:\Windows\Panther\Invoke-OSDSpecialize.xml']
 
-- Execute: [
-  ['C:\Windows\System32\reg.exe load HKLM\TempSYSTEM C:\Windows\System32\Config\SYSTEM'],
-  ['C:\Windows\System32\reg.exe add HKLM\TempSYSTEM\Setup /v UnattendFile /d C:\Windows\Panther\Invoke-OSDSpecialize.xml /f'],
-  ['C:\Windows\System32\reg.exe unload HKLM\TempSYSTEM'],
-]
+- Execute:
+  - ['C:\Windows\System32\reg.exe load HKLM\TempSYSTEM C:\Windows\System32\Config\SYSTEM']
+  - ['C:\Windows\System32\reg.exe add HKLM\TempSYSTEM\Setup /v UnattendFile /d C:\Windows\Panther\Invoke-OSDSpecialize.xml /f']
+  - ['C:\Windows\System32\reg.exe unload HKLM\TempSYSTEM']
 
 # Add Glazier to the default user profile,
 # to work around it not loading properly after booting into autologon.
-- MultiPSCommand: [
-  ['& C:\Windows\System32\reg.exe load HKLM\TempDefaultUser C:\Users\Default\NTUSER.DAT'],
-  ['& C:\Windows\System32\reg.exe add "HKLM\TempDefaultUser\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" /v Shell /t REG_SZ /d "powershell.exe -NoProfile -WindowStyle Maximized -NoExit -NoLogo -ExecutionPolicy Bypass -Command & C:\windows\system32\autobuild.ps1" /f'],
-  ['& C:\Windows\System32\reg.exe add "HKLM\TempDefaultUser\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v NoLogoff /t REG_DWORD /d 1 /f'],
-  ['& C:\Windows\System32\reg.exe add "HKLM\TempDefaultUser\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableChangePassword /t REG_DWORD /d 1 /f'],
-  ['& C:\Windows\System32\reg.exe add "HKLM\TempDefaultUser\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableLockWorkstation /t REG_DWORD /d 1 /f'],
-  ['& C:\Windows\System32\reg.exe unload HKLM\TempDefaultUser'],
-]
+- MultiPSCommand:
+  - ['& C:\Windows\System32\reg.exe load HKLM\TempDefaultUser C:\Users\Default\NTUSER.DAT']
+  - ['& C:\Windows\System32\reg.exe add "HKLM\TempDefaultUser\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" /v Shell /t REG_SZ /d "powershell.exe -NoProfile -WindowStyle Maximized -NoExit -NoLogo -ExecutionPolicy Bypass -Command & C:\windows\system32\autobuild.ps1" /f']
+  - ['& C:\Windows\System32\reg.exe add "HKLM\TempDefaultUser\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v NoLogoff /t REG_DWORD /d 1 /f']
+  - ['& C:\Windows\System32\reg.exe add "HKLM\TempDefaultUser\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableChangePassword /t REG_DWORD /d 1 /f']
+  - ['& C:\Windows\System32\reg.exe add "HKLM\TempDefaultUser\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableLockWorkstation /t REG_DWORD /d 1 /f']
+  - ['& C:\Windows\System32\reg.exe unload HKLM\TempDefaultUser']
 
 - MkDir: ['C:\MGMT']
 - MkDir: ['C:\MGMT\Temp']
@@ -55,8 +54,8 @@ controls:
 
 - pull:
   - ['MGMT/mgmt-installer-amd64.exe', 'C:\MGMT\mgmt-installer-amd64.exe']
-  - ['Office365/officedeploymenttool_15128-20224.exe', 'C:\MGMT\Temp\odt_installer.exe']
-  - ['Office365/config.xml', 'C:\MGMT\Temp\odt\a1-config.xml']
+  - ['Office365/officedeploymenttool_20430-20146.exe', 'C:\MGMT\Temp\odt_installer.exe']
+  - ['Office365/config.xml', 'C:\MGMT\Temp\odt\configuration.xml']
 
 
 #################################################################################################
@@ -90,14 +89,13 @@ controls:
 - Sleep: [30, 'Waiting for Windows Update reboot if required...']
 
 # Remove Glazier from the default user profile.
-- MultiPSCommand: [
-  ['& C:\Windows\System32\reg.exe load HKLM\TempDefaultUser C:\Users\Default\NTUSER.DAT'],
-  ['& C:\Windows\System32\reg.exe delete "HKLM\TempDefaultUser\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" /v Shell /f'],
-  ['& C:\Windows\System32\reg.exe add "HKLM\TempDefaultUser\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v NoLogoff /t REG_DWORD /d 0 /f'],
-  ['& C:\Windows\System32\reg.exe add "HKLM\TempDefaultUser\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableChangePassword /t REG_DWORD /d 0 /f'],
-  ['& C:\Windows\System32\reg.exe add "HKLM\TempDefaultUser\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableLockWorkstation /t REG_DWORD /d 0 /f'],
-  ['& C:\Windows\System32\reg.exe unload HKLM\TempDefaultUser'],
-]
+- MultiPSCommand:
+  - ['& C:\Windows\System32\reg.exe load HKLM\TempDefaultUser C:\Users\Default\NTUSER.DAT']
+  - ['& C:\Windows\System32\reg.exe delete "HKLM\TempDefaultUser\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" /v Shell /f']
+  - ['& C:\Windows\System32\reg.exe add "HKLM\TempDefaultUser\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v NoLogoff /t REG_DWORD /d 0 /f']
+  - ['& C:\Windows\System32\reg.exe add "HKLM\TempDefaultUser\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableChangePassword /t REG_DWORD /d 0 /f']
+  - ['& C:\Windows\System32\reg.exe add "HKLM\TempDefaultUser\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableLockWorkstation /t REG_DWORD /d 0 /f']
+  - ['& C:\Windows\System32\reg.exe unload HKLM\TempDefaultUser']
 
 #################################################################################################
 # Install Software                                                                              #
@@ -123,7 +121,7 @@ controls:
 
 - PSCommand: ['& C:\MGMT\Temp\odt_installer.exe /extract:C:\MGMT\Temp\odt /quiet /norestart']
 
-- PSCommand: ['& C:\MGMT\Temp\odt\setup.exe /configure C:\MGMT\Temp\odt\a1-config.xml']
+- PSCommand: ['& C:\MGMT\Temp\odt\setup.exe /configure C:\MGMT\Temp\odt\configuration.xml']
 
 - PSCommand: ['& C:\MGMT\mgmt-installer-amd64.exe']
 
