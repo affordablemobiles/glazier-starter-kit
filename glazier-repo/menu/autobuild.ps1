@@ -99,6 +99,19 @@ function Get-GlazierProfiles {
     return $menuConfig
 }
 
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public class Win32WindowHelper {
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetConsoleWindow();
+}
+"@ -ErrorAction SilentlyContinue
+
 function Show-GlazierProfileGUI {
     param([hashtable]$MenuData)
 
@@ -107,6 +120,7 @@ function Show-GlazierProfileGUI {
     $script:remainingSeconds = [int]$MenuData.timeout_seconds
     $script:timerActive = ($script:remainingSeconds -gt 0)
     $script:selectedProfile = $defaultId
+    $consoleHwnd = [IntPtr]::Zero
 
     try {
         Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
@@ -115,46 +129,50 @@ function Show-GlazierProfileGUI {
 
         $form = New-Object System.Windows.Forms.Form
         $form.Text = "Glazier Deployment — Select Profile"
-        $form.Size = New-Object System.Drawing.Size(520, 360)
-        $form.StartPosition = "CenterScreen"
-        $form.FormBorderStyle = "FixedDialog"
+        $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
+        $form.ClientSize = New-Object System.Drawing.Size(640, 390)
+        $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+        $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
         $form.MaximizeBox = $false
         $form.MinimizeBox = $false
         $form.TopMost = $true
         $form.BackColor = [System.Drawing.Color]::FromArgb(245, 247, 250)
-        $form.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+        $form.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Regular)
 
         # Header Title
         $lblTitle = New-Object System.Windows.Forms.Label
         $lblTitle.Text = "Select Glazier Imaging Profile"
-        $lblTitle.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 14, [System.Drawing.FontStyle]::Bold)
+        $lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 15, [System.Drawing.FontStyle]::Bold)
         $lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
-        $lblTitle.Location = New-Object System.Drawing.Point(24, 20)
-        $lblTitle.Size = New-Object System.Drawing.Size(460, 30)
+        $lblTitle.Location = New-Object System.Drawing.Point(28, 22)
+        $lblTitle.Size = New-Object System.Drawing.Size(584, 36)
         $form.Controls.Add($lblTitle)
 
         # Subheader / Server info
         $lblServer = New-Object System.Windows.Forms.Label
         $lblServer.Text = "Config Server: $config_server"
-        $lblServer.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+        $lblServer.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Regular)
         $lblServer.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
-        $lblServer.Location = New-Object System.Drawing.Point(24, 50)
-        $lblServer.Size = New-Object System.Drawing.Size(460, 20)
+        $lblServer.Location = New-Object System.Drawing.Point(28, 60)
+        $lblServer.Size = New-Object System.Drawing.Size(584, 26)
+        $lblServer.AutoEllipsis = $true
         $form.Controls.Add($lblServer)
 
         # Profile Dropdown Label
         $lblCombo = New-Object System.Windows.Forms.Label
         $lblCombo.Text = "Deployment Profile:"
-        $lblCombo.Location = New-Object System.Drawing.Point(24, 80)
-        $lblCombo.Size = New-Object System.Drawing.Size(460, 22)
+        $lblCombo.Font = New-Object System.Drawing.Font("Segoe UI", 10.5, [System.Drawing.FontStyle]::Bold)
+        $lblCombo.ForeColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
+        $lblCombo.Location = New-Object System.Drawing.Point(28, 96)
+        $lblCombo.Size = New-Object System.Drawing.Size(584, 26)
         $form.Controls.Add($lblCombo)
 
         # ComboBox
         $combo = New-Object System.Windows.Forms.ComboBox
         $combo.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
-        $combo.Font = New-Object System.Drawing.Font("Segoe UI", 11)
-        $combo.Location = New-Object System.Drawing.Point(24, 104)
-        $combo.Size = New-Object System.Drawing.Size(456, 30)
+        $combo.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Regular)
+        $combo.Location = New-Object System.Drawing.Point(28, 126)
+        $combo.Size = New-Object System.Drawing.Size(584, 34)
 
         $defaultIndex = 0
         for ($i = 0; $i -lt $profiles.Count; $i++) {
@@ -165,41 +183,69 @@ function Show-GlazierProfileGUI {
         }
         $form.Controls.Add($combo)
 
-        # Description Box
-        $lblDesc = New-Object System.Windows.Forms.Label
-        $lblDesc.Location = New-Object System.Drawing.Point(24, 146)
-        $lblDesc.Size = New-Object System.Drawing.Size(456, 60)
-        $lblDesc.ForeColor = [System.Drawing.Color]::FromArgb(71, 85, 105)
-        $lblDesc.BackColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
-        $lblDesc.Padding = New-Object System.Windows.Forms.Padding(8)
-        $form.Controls.Add($lblDesc)
+        # Profile Details Card
+        $panelDesc = New-Object System.Windows.Forms.Panel
+        $panelDesc.Location = New-Object System.Drawing.Point(28, 172)
+        $panelDesc.Size = New-Object System.Drawing.Size(584, 100)
+        $panelDesc.BackColor = [System.Drawing.Color]::FromArgb(235, 240, 245)
+        $panelDesc.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+        $form.Controls.Add($panelDesc)
 
-        # Countdown Status Label
+        $lblDesc = New-Object System.Windows.Forms.Label
+        $lblDesc.Location = New-Object System.Drawing.Point(12, 10)
+        $lblDesc.Size = New-Object System.Drawing.Size(558, 78)
+        $lblDesc.ForeColor = [System.Drawing.Color]::FromArgb(51, 65, 85)
+        $lblDesc.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Regular)
+        $panelDesc.Controls.Add($lblDesc)
+
+        # Countdown / Status Label
         $lblTimer = New-Object System.Windows.Forms.Label
-        $lblTimer.Location = New-Object System.Drawing.Point(24, 216)
-        $lblTimer.Size = New-Object System.Drawing.Size(456, 22)
+        $lblTimer.Location = New-Object System.Drawing.Point(28, 286)
+        $lblTimer.Size = New-Object System.Drawing.Size(584, 28)
+        $lblTimer.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Regular)
         $lblTimer.ForeColor = [System.Drawing.Color]::FromArgb(180, 83, 9)
         $form.Controls.Add($lblTimer)
 
-        # Start Button
+        # Bottom Action Buttons (Y = 328, Height = 40):
+        # Pause / Resume Timer Button
+        $btnPause = New-Object System.Windows.Forms.Button
+        $btnPause.Text = "Pause Timer"
+        $btnPause.Location = New-Object System.Drawing.Point(28, 328)
+        $btnPause.Size = New-Object System.Drawing.Size(140, 40)
+        $btnPause.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Regular)
+        $btnPause.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+        $btnPause.BackColor = [System.Drawing.Color]::FromArgb(240, 242, 245)
+        $btnPause.ForeColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
+        $btnPause.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(203, 213, 225)
+        $form.Controls.Add($btnPause)
+
+        # Open Terminal Button
+        $btnTerminal = New-Object System.Windows.Forms.Button
+        $btnTerminal.Text = "Open Terminal"
+        $btnTerminal.Location = New-Object System.Drawing.Point(180, 328)
+        $btnTerminal.Size = New-Object System.Drawing.Size(140, 40)
+        $btnTerminal.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Regular)
+        $btnTerminal.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+        $btnTerminal.BackColor = [System.Drawing.Color]::FromArgb(240, 242, 245)
+        $btnTerminal.ForeColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
+        $btnTerminal.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(203, 213, 225)
+        $btnTerminal.Add_Click({
+            Start-Process "PowerShell.exe" -ArgumentList "-NoLogo"
+        })
+        $form.Controls.Add($btnTerminal)
+
+        # Start Imaging Primary Button
         $btnStart = New-Object System.Windows.Forms.Button
-        $btnStart.Location = New-Object System.Drawing.Point(280, 250)
-        $btnStart.Size = New-Object System.Drawing.Size(200, 40)
-        $btnStart.BackColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
+        $btnStart.Location = New-Object System.Drawing.Point(442, 328)
+        $btnStart.Size = New-Object System.Drawing.Size(170, 40)
+        $btnStart.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 212)
         $btnStart.ForeColor = [System.Drawing.Color]::White
         $btnStart.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-        $btnStart.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 10, [System.Drawing.FontStyle]::Bold)
+        $btnStart.FlatAppearance.BorderSize = 0
+        $btnStart.Font = New-Object System.Drawing.Font("Segoe UI", 10.5, [System.Drawing.FontStyle]::Bold)
         $btnStart.DialogResult = [System.Windows.Forms.DialogResult]::OK
         $form.Controls.Add($btnStart)
         $form.AcceptButton = $btnStart
-
-        # Pause Timer Button
-        $btnPause = New-Object System.Windows.Forms.Button
-        $btnPause.Text = "Pause Timer"
-        $btnPause.Location = New-Object System.Drawing.Point(24, 250)
-        $btnPause.Size = New-Object System.Drawing.Size(130, 40)
-        $btnPause.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-        $form.Controls.Add($btnPause)
 
         # Timer object
         $timer = New-Object System.Windows.Forms.Timer
@@ -212,7 +258,22 @@ function Show-GlazierProfileGUI {
                 $lblTimer.Text = "Auto-start timer paused. Click 'Start Imaging' when ready."
                 $lblTimer.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
                 $btnStart.Text = "Start Imaging"
-                $btnPause.Enabled = $false
+                $btnPause.Text = "Resume Timer"
+            }
+        }
+
+        $toggleCountdown = {
+            if ($script:timerActive) {
+                & $stopCountdown
+            } else {
+                if ($script:remainingSeconds -gt 0) {
+                    $script:timerActive = $true
+                    $timer.Start()
+                    $lblTimer.Text = "Auto-starting '$($script:selectedProfile)' in $($script:remainingSeconds) seconds..."
+                    $lblTimer.ForeColor = [System.Drawing.Color]::FromArgb(180, 83, 9)
+                    $btnStart.Text = "Start Imaging ($($script:remainingSeconds)s)"
+                    $btnPause.Text = "Pause Timer"
+                }
             }
         }
 
@@ -224,10 +285,10 @@ function Show-GlazierProfileGUI {
             }
         })
 
-        # Pause countdown if the user interacts with the dropdown or clicks pause
+        # Pause countdown if the user interacts with the dropdown or clicks pause/resume
         $combo.Add_DropDown($stopCountdown)
         $combo.Add_KeyDown($stopCountdown)
-        $btnPause.Add_Click($stopCountdown)
+        $btnPause.Add_Click($toggleCountdown)
 
         # Set initial selection before starting timer so SelectedIndexChanged sets description
         if ($combo.Items.Count -gt 0) {
@@ -255,9 +316,30 @@ function Show-GlazierProfileGUI {
             $btnPause.Enabled = $false
         }
 
-        [void]$form.ShowDialog()
-        $timer.Dispose()
-        $form.Dispose()
+        # Minimize console before showing menu GUI
+        try {
+            $consoleHwnd = [Win32WindowHelper]::GetConsoleWindow()
+            if ($consoleHwnd -ne [IntPtr]::Zero) {
+                [Win32WindowHelper]::ShowWindow($consoleHwnd, 6) # SW_MINIMIZE
+            }
+        } catch {
+            # continue even if console helper fails
+        }
+
+        try {
+            [void]$form.ShowDialog()
+        } finally {
+            # Restore console so Glazier imaging logs are visible during build execution
+            try {
+                if ($consoleHwnd -ne [IntPtr]::Zero) {
+                    [Win32WindowHelper]::ShowWindow($consoleHwnd, 9) # SW_RESTORE
+                }
+            } catch {
+                # ignore restore error
+            }
+            $timer.Dispose()
+            $form.Dispose()
+        }
     } catch {
         Write-Host "Warning: GUI failed to display ($_); falling back to default profile: $defaultId" -ForegroundColor Yellow
         $script:selectedProfile = $defaultId

@@ -682,6 +682,48 @@ Write-Log "Configuring offline WinPE registry wallpaper defaults..." -Color Cyan
 & reg.exe add "HKLM\WinPE_Default\Control Panel\Colors" /v Background /t REG_SZ /d "0 0 0" /f | Out-Null
 & reg.exe unload "HKLM\WinPE_Default" | Out-Null
 
+Write-Log "Ensuring core Segoe UI and Consolas fonts and font registry mappings exist in mounted WIM..." -Color Cyan
+$destFontsDir = "$MountPath\Windows\Fonts"
+if (-not (Test-Path $destFontsDir)) {
+    New-Item -ItemType Directory -Path $destFontsDir -Force | Out-Null
+}
+
+$coreFonts = @(
+    @{ File = "segoeui.ttf";  Name = "Segoe UI (TrueType)" },
+    @{ File = "segoeuib.ttf"; Name = "Segoe UI Bold (TrueType)" },
+    @{ File = "segoeuii.ttf"; Name = "Segoe UI Italic (TrueType)" },
+    @{ File = "seguisb.ttf";  Name = "Segoe UI Semibold (TrueType)" },
+    @{ File = "consola.ttf";  Name = "Consolas (TrueType)" },
+    @{ File = "consolab.ttf"; Name = "Consolas Bold (TrueType)" }
+)
+
+foreach ($f in $coreFonts) {
+    $srcFont = "$env:SystemRoot\Fonts\$($f.File)"
+    $destFont = "$destFontsDir\$($f.File)"
+    if (Test-Path $srcFont) {
+        if (-not (Test-Path $destFont)) {
+            Copy-Item -Path $srcFont -Destination $destFont -Force
+            Write-Log "Copied font $($f.File) to WIM Fonts directory."
+        }
+    } else {
+        Write-Log "Warning: Host font $srcFont not found." -Color Yellow
+    }
+}
+
+try {
+    & reg.exe unload "HKLM\WinPE_Software" 2>$null | Out-Null
+    & reg.exe load "HKLM\WinPE_Software" "$MountPath\Windows\System32\Config\SOFTWARE" | Out-Null
+    foreach ($f in $coreFonts) {
+        if (Test-Path "$destFontsDir\$($f.File)") {
+            & reg.exe add "HKLM\WinPE_Software\Microsoft\Windows NT\CurrentVersion\Fonts" /v $f.Name /t REG_SZ /d $f.File /f | Out-Null
+        }
+    }
+} catch {
+    Write-Log "Warning: Failed to update font registry keys in WinPE SOFTWARE hive: $_" -Color Yellow
+} finally {
+    & reg.exe unload "HKLM\WinPE_Software" 2>$null | Out-Null
+}
+
 Write-Log "Writing Set-WinPEWallpaper.ps1 (resolution cascade + bottom-left crop) to System32..." -Color Cyan
 $wallpaperScriptPath = "$MountPath\Windows\System32\Set-WinPEWallpaper.ps1"
 $wallpaperScriptContent = @'
@@ -854,6 +896,355 @@ try {
 
 Set-Content -Path $wallpaperScriptPath -Value $wallpaperScriptContent -Encoding UTF8 -Force
 
+Write-Log "Writing Initialize-GlazierWinPE.ps1 (Boot Progress GUI) to System32..." -Color Cyan
+$initScriptPath = "$MountPath\Windows\System32\Initialize-GlazierWinPE.ps1"
+$initScriptContent = @'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
+
+$win32TypeDef = @"
+using System;
+using System.Runtime.InteropServices;
+
+public class Win32Window {
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetConsoleWindow();
+}
+"@
+Add-Type -TypeDefinition $win32TypeDef -ErrorAction SilentlyContinue
+
+# Step 1: Display & Wallpaper
+# Call Set-WinPEWallpaper.ps1 FIRST so screen resolution is configured before the form centers itself on screen
+$wallpaperScript = "$env:SystemRoot\System32\Set-WinPEWallpaper.ps1"
+if (-not (Test-Path $wallpaperScript)) {
+    $wallpaperScript = "X:\Windows\System32\Set-WinPEWallpaper.ps1"
+}
+if (Test-Path $wallpaperScript) {
+    try {
+        & $wallpaperScript
+    } catch {
+        # continue even if wallpaper script fails
+    }
+}
+
+# Minimize (DO NOT Hide) Parent Console so Startnet.cmd is minimised cleanly to the bottom-left
+$consoleHwnd = [Win32Window]::GetConsoleWindow()
+if ($consoleHwnd -ne [IntPtr]::Zero) {
+    [Win32Window]::ShowWindow($consoleHwnd, 6) # SW_MINIMIZE
+}
+
+function Test-WinPENetwork {
+    try {
+        $interfaces = [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()
+        foreach ($iface in $interfaces) {
+            if ($iface.OperationalStatus.ToString() -eq "Up" -and
+                $iface.NetworkInterfaceType.ToString() -ne "Loopback") {
+                $ipProps = $iface.GetIPProperties()
+                if ($ipProps -and $ipProps.UnicastAddresses) {
+                    foreach ($uni in $ipProps.UnicastAddresses) {
+                        if ($uni.Address.AddressFamily.ToString() -eq "InterNetwork") {
+                            $ipStr = $uni.Address.ToString()
+                            if ($ipStr -notlike "169.254.*" -and $ipStr -notlike "127.*" -and $ipStr -ne "0.0.0.0") {
+                                return [PSCustomObject]@{
+                                    Connected = $true
+                                    Interface = $iface.Description
+                                    Name      = $iface.Name
+                                    IPAddress = $ipStr
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } catch {
+        # ignore error and return $null
+    }
+    return $null
+}
+
+# Construct Boot Progress GUI
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "Glazier WinPE Initialization"
+$form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
+$form.ClientSize = New-Object System.Drawing.Size(620, 250)
+$form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+$form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+$form.MaximizeBox = $false
+$form.MinimizeBox = $false
+$form.TopMost = $true
+$form.BackColor = [System.Drawing.Color]::FromArgb(245, 247, 250)
+
+# Title Label: Location = (28, 22), Size = (564, 36)
+$lblTitle = New-Object System.Windows.Forms.Label
+$lblTitle.Text = "Preparing Glazier Environment"
+$lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 15, [System.Drawing.FontStyle]::Bold)
+$lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
+$lblTitle.Location = New-Object System.Drawing.Point(28, 22)
+$lblTitle.Size = New-Object System.Drawing.Size(564, 36)
+$form.Controls.Add($lblTitle)
+
+# Step Status Label: Location = (28, 64), Size = (564, 28)
+$lblStatus = New-Object System.Windows.Forms.Label
+$lblStatus.Text = "Step 1 of 4: Initializing environment..."
+$lblStatus.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Regular)
+$lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(51, 65, 85)
+$lblStatus.Location = New-Object System.Drawing.Point(28, 64)
+$lblStatus.Size = New-Object System.Drawing.Size(564, 28)
+$form.Controls.Add($lblStatus)
+
+# Progress Bar: Location = (28, 100), Size = (564, 26)
+$progressBar = New-Object System.Windows.Forms.ProgressBar
+$progressBar.Location = New-Object System.Drawing.Point(28, 100)
+$progressBar.Size = New-Object System.Drawing.Size(564, 26)
+$progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+$progressBar.MarqueeAnimationSpeed = 25
+$form.Controls.Add($progressBar)
+
+# Detail / Sub-status Label: Location = (28, 134), Size = (564, 24)
+$lblDetail = New-Object System.Windows.Forms.Label
+$lblDetail.Text = "Configuring system settings..."
+$lblDetail.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Regular)
+$lblDetail.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
+$lblDetail.Location = New-Object System.Drawing.Point(28, 134)
+$lblDetail.Size = New-Object System.Drawing.Size(564, 24)
+$form.Controls.Add($lblDetail)
+
+# Bottom Buttons (Y = 178, Height = 38):
+$btnLogToggle = New-Object System.Windows.Forms.Button
+$btnLogToggle.Text = "Show Debug Log ▾"
+$btnLogToggle.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Regular)
+$btnLogToggle.Location = New-Object System.Drawing.Point(28, 178)
+$btnLogToggle.Size = New-Object System.Drawing.Size(160, 38)
+$btnLogToggle.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$btnLogToggle.BackColor = [System.Drawing.Color]::FromArgb(240, 242, 245)
+$btnLogToggle.ForeColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
+$btnLogToggle.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(203, 213, 225)
+$form.Controls.Add($btnLogToggle)
+
+$btnTerminal = New-Object System.Windows.Forms.Button
+$btnTerminal.Text = "Open Terminal"
+$btnTerminal.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Regular)
+$btnTerminal.Location = New-Object System.Drawing.Point(200, 178)
+$btnTerminal.Size = New-Object System.Drawing.Size(150, 38)
+$btnTerminal.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$btnTerminal.BackColor = [System.Drawing.Color]::FromArgb(240, 242, 245)
+$btnTerminal.ForeColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
+$btnTerminal.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(203, 213, 225)
+$form.Controls.Add($btnTerminal)
+
+# Debug Log TextBox: Location = (28, 232), Size = (564, 184)
+$txtLog = New-Object System.Windows.Forms.TextBox
+$txtLog.Location = New-Object System.Drawing.Point(28, 232)
+$txtLog.Size = New-Object System.Drawing.Size(564, 184)
+$txtLog.Font = New-Object System.Drawing.Font("Consolas", 9, [System.Drawing.FontStyle]::Regular)
+$txtLog.Multiline = $true
+$txtLog.ReadOnly = $true
+$txtLog.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
+$txtLog.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 30)
+$txtLog.ForeColor = [System.Drawing.Color]::FromArgb(220, 220, 220)
+$txtLog.Visible = $false
+$form.Controls.Add($txtLog)
+
+$btnLogToggle.Add_Click({
+    if ($txtLog.Visible) {
+        $txtLog.Visible = $false
+        $form.ClientSize = New-Object System.Drawing.Size(620, 250)
+        $btnLogToggle.Text = "Show Debug Log ▾"
+    } else {
+        $form.ClientSize = New-Object System.Drawing.Size(620, 440)
+        $txtLog.Visible = $true
+        $btnLogToggle.Text = "Hide Debug Log ▴"
+    }
+})
+
+$btnTerminal.Add_Click({
+    Start-Process "PowerShell.exe" -ArgumentList "-NoLogo"
+})
+
+function Add-Log {
+    param([string]$Message, [string]$Detail = "")
+    $ts = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    $txtLog.AppendText("[$ts] $Message`r`n")
+    $txtLog.SelectionStart = $txtLog.TextLength
+    $txtLog.ScrollToCaret()
+    if ($Detail) {
+        $lblDetail.Text = $Detail
+    } else {
+        $lblDetail.Text = $Message
+    }
+    Write-Host "[$ts] $Message"
+    [System.Windows.Forms.Application]::DoEvents()
+}
+
+function Set-Step {
+    param([string]$Status, [string]$Detail = "")
+    $lblStatus.Text = $Status
+    Add-Log -Message $Status -Detail $Detail
+}
+
+try {
+    $form.Show()
+    [System.Windows.Forms.Application]::DoEvents()
+    Add-Log -Message "Glazier WinPE initialization started." -Detail "Display configured."
+
+    # Step 2: Zero-Dependency Network Detection & Polling
+    Set-Step -Status "Step 2 of 4: Checking network connectivity..." -Detail "Checking network interfaces..."
+
+    # Start WlanSvc if present and not running
+    $wlanSvc = Get-Service -Name WlanSvc -ErrorAction SilentlyContinue
+    if ($wlanSvc) {
+        if ($wlanSvc.Status -ne 'Running') {
+            Add-Log -Message "Starting WLAN AutoConfig service (WlanSvc)..." -Detail "Starting WlanSvc..."
+            Start-Service -Name WlanSvc -ErrorAction SilentlyContinue
+        } else {
+            Add-Log -Message "WLAN AutoConfig service (WlanSvc) is already running."
+        }
+    }
+
+    # Poll Test-WinPENetwork every 1 second for up to 15 seconds
+    $activeNet = $null
+    $maxPollSeconds = 15
+    for ($sec = 1; $sec -le $maxPollSeconds; $sec++) {
+        $activeNet = Test-WinPENetwork
+        if ($activeNet) {
+            Add-Log -Message "Network interface active: $($activeNet.Name) ($($activeNet.Interface)) with IP $($activeNet.IPAddress)" -Detail "Connected: $($activeNet.IPAddress)"
+            break
+        }
+        Add-Log -Message "Waiting for active IPv4 connection (Attempt $sec of $maxPollSeconds)..." -Detail "Waiting for network link ($sec/$maxPollSeconds)..."
+        for ($tick = 0; $tick -lt 10; $tick++) {
+            [System.Windows.Forms.Application]::DoEvents()
+            Start-Sleep -Milliseconds 100
+        }
+    }
+
+    if (-not $activeNet) {
+        Add-Log -Message "No wired network detected. Launching Wi-Fi setup..." -Detail "Launching Wi-Fi setup..."
+        $wcPaths = @(
+            "$env:SystemRoot\System32\WirelessConnect.exe",
+            "$env:SystemRoot\WirelessConnect.exe",
+            "X:\Windows\System32\WirelessConnect.exe",
+            "X:\Windows\WirelessConnect.exe"
+        )
+        $wcExe = $wcPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if ($wcExe) {
+            $form.TopMost = $false
+            [System.Windows.Forms.Application]::DoEvents()
+            Start-Process -FilePath $wcExe -Wait
+            $form.TopMost = $true
+            [System.Windows.Forms.Application]::DoEvents()
+
+            Add-Log -Message "Wi-Fi setup utility closed. Waiting up to 10 seconds for DHCP lease..." -Detail "Waiting for Wi-Fi DHCP lease..."
+            for ($wSec = 1; $wSec -le 10; $wSec++) {
+                $activeNet = Test-WinPENetwork
+                if ($activeNet) {
+                    Add-Log -Message "Network connected: $($activeNet.Name) with IP $($activeNet.IPAddress)" -Detail "Connected: $($activeNet.IPAddress)"
+                    break
+                }
+                for ($tick = 0; $tick -lt 10; $tick++) {
+                    [System.Windows.Forms.Application]::DoEvents()
+                    Start-Sleep -Milliseconds 100
+                }
+            }
+        } else {
+            Add-Log -Message "WirelessConnect.exe not found on system." -Detail "No Wi-Fi setup utility found."
+        }
+    }
+
+    # Step 3: Keep OSD & MSCatalog Module Updates with Visible GUI Feedback
+    Set-Step -Status "Step 3 of 4: Updating OSD & MSCatalog PowerShell modules (this may take a minute)..." -Detail "Checking for module updates..."
+
+    $updateScriptContent = @(
+        "`$ConfirmPreference = 'None'",
+        "`$ProgressPreference = 'SilentlyContinue'",
+        "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13 } catch { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 }",
+        "Import-Module OSD -ErrorAction SilentlyContinue",
+        "Write-Output 'Testing web connection...'",
+        "`$canConnect = `$false",
+        "if (Get-Command Test-WebConnection -ErrorAction SilentlyContinue) { `$canConnect = Test-WebConnection } else { try { `$resp = Invoke-WebRequest -Uri 'https://www.powershellgallery.com' -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop; `$canConnect = (`$resp.StatusCode -eq 200) } catch { `$canConnect = `$false } }",
+        "if (`$canConnect) {",
+        "    Write-Output 'Web connection verified. Checking NuGet package provider...'",
+        "    if (-not (Get-PackageProvider -ListAvailable -Name NuGet -ErrorAction SilentlyContinue)) {",
+        "        Write-Output 'Installing NuGet package provider...'",
+        "        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope AllUsers | Out-Null",
+        "    }",
+        "    Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue",
+        "    Write-Output 'Updating OSD module from PSGallery...'",
+        "    Install-Module OSD -Force -AllowClobber -SkipPublisherCheck -Confirm:`$false -ErrorAction SilentlyContinue",
+        "    Write-Output 'Updating MSCatalog module from PSGallery...'",
+        "    Install-Module MSCatalog -Force -AllowClobber -SkipPublisherCheck -Confirm:`$false -ErrorAction SilentlyContinue",
+        "    Write-Output 'OSD and MSCatalog module updates completed.'",
+        "} else {",
+        "    Write-Output 'Web connection unavailable; skipping module updates.'",
+        "}"
+    ) -join "`r`n"
+
+    $updateScriptFile = "$env:TEMP\Update-WinPEModules.ps1"
+    Set-Content -Path $updateScriptFile -Value $updateScriptContent -Encoding UTF8 -Force
+
+    $updateLog = "$env:TEMP\update_modules.log"
+    $updateErrLog = "$env:TEMP\update_modules_err.log"
+    if (Test-Path $updateLog) { Remove-Item $updateLog -Force -ErrorAction SilentlyContinue }
+    if (Test-Path $updateErrLog) { Remove-Item $updateErrLog -Force -ErrorAction SilentlyContinue }
+
+    $updateProc = Start-Process -FilePath "PowerShell.exe" `
+        -ArgumentList "-NoProfile -NoLogo -ExecutionPolicy Bypass -File `"$updateScriptFile`"" `
+        -RedirectStandardOutput $updateLog `
+        -RedirectStandardError $updateErrLog `
+        -WindowStyle Hidden -PassThru
+
+    $lastLineCount = 0
+    while (-not $updateProc.HasExited) {
+        if (Test-Path $updateLog) {
+            $lines = Get-Content -Path $updateLog -ErrorAction SilentlyContinue
+            if ($lines -and $lines.Count -gt $lastLineCount) {
+                for ($i = $lastLineCount; $i -lt $lines.Count; $i++) {
+                    if ($lines[$i]) {
+                        Add-Log -Message $lines[$i] -Detail $lines[$i]
+                    }
+                }
+                $lastLineCount = $lines.Count
+            }
+        }
+        [System.Windows.Forms.Application]::DoEvents()
+        Start-Sleep -Milliseconds 100
+    }
+
+    if (Test-Path $updateLog) {
+        $lines = Get-Content -Path $updateLog -ErrorAction SilentlyContinue
+        if ($lines -and $lines.Count -gt $lastLineCount) {
+            for ($i = $lastLineCount; $i -lt $lines.Count; $i++) {
+                if ($lines[$i]) {
+                    Add-Log -Message $lines[$i] -Detail $lines[$i]
+                }
+            }
+        }
+    }
+
+    # Step 4: Hand-off
+    Set-Step -Status "Step 4 of 4: Launching Glazier Profile Menu..." -Detail "Starting Glazier autobuild..."
+    Add-Log -Message "Initialization complete. Handing off to autobuild.ps1..."
+
+    for ($t = 0; $t -lt 5; $t++) {
+        [System.Windows.Forms.Application]::DoEvents()
+        Start-Sleep -Milliseconds 100
+    }
+} catch {
+    Write-Host "Warning: Glazier WinPE initialization encountered an error: $_" -ForegroundColor Yellow
+} finally {
+    if ($form -and -not $form.IsDisposed) {
+        $form.Close()
+        $form.Dispose()
+    }
+}
+'@
+
+Set-Content -Path $initScriptPath -Value $initScriptContent -Encoding UTF8 -Force
+
 $osd_version = (Get-InstalledModule -Name OSD).Version.ToString()
 Write-Log "Detected OSDCloud version $osd_version, writing to startup script..." -Color Green
 
@@ -866,18 +1257,8 @@ wpeinit
 cd \
 ECHO Apply PowerShell Registry Fixes....
 X:\Windows\System32\reg.exe import "X:\Windows\System32\WindowsPowerShell\v1.0\pwrshsip.reg" /reg:64
-ECHO Configuring Display Resolution and Wallpaper...
-PowerShell -NoProfile -NoLogo -WindowStyle Hidden -ExecutionPolicy Bypass -File "X:\Windows\System32\Set-WinPEWallpaper.ps1"
-ECHO Initialize Hardware
-start /wait PowerShell -Nol -W Mi -C Start-Sleep -Seconds 10
-ECHO Checking Network Connectivity...
-start /wait PowerShell -NoL -C "& {{ if (Get-Service WlanSvc -ErrorAction SilentlyContinue) {{ if ((Get-Service WlanSvc).Status -ne 'Running') {{ Start-Service WlanSvc -ErrorAction SilentlyContinue }} }}; Start-Sleep -Seconds 5; `$activeIP = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {{ `$_.InterfaceAlias -notmatch 'Loopback' -and `$_.IPAddress -notlike '169.254.*' }}; if (-not `$activeIP) {{ Write-Host '[!] No active network connection detected. Prompting for Wi-Fi...' -ForegroundColor Yellow; if (Test-Path 'X:\Windows\WirelessConnect.exe') {{ Start-Process -FilePath 'X:\Windows\WirelessConnect.exe' -Wait }} elseif (Test-Path 'X:\Windows\System32\WirelessConnect.exe') {{ Start-Process -FilePath 'X:\Windows\System32\WirelessConnect.exe' -Wait }}; Start-Sleep -Seconds 5 }} else {{ Write-Host '[+] Network connection detected.' -ForegroundColor Green }} }}"
-ECHO Checking OSD and MSCatalog PowerShell Module Updates (Minimized)
-start /wait PowerShell -NoL -W Mi -C "& {{ `$ConfirmPreference = 'None'; `$ProgressPreference = 'SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Import-Module OSD -ErrorAction SilentlyContinue; if (Test-WebConnection) {{ if (-not (Get-PackageProvider -ListAvailable -Name NuGet -ErrorAction SilentlyContinue)) {{ Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope AllUsers | Out-Null }}; Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue; Install-Module OSD -Force -AllowClobber -SkipPublisherCheck -Confirm:`$false -ErrorAction SilentlyContinue; Install-Module MSCatalog -Force -AllowClobber -SkipPublisherCheck -Confirm:`$false -ErrorAction SilentlyContinue }} }}"
-ECHO Initialize PowerShell (Minimized)
-start PowerShell -Nol -W Mi
-@ECHO ON
-@ECHO OFF
+ECHO Initializing Glazier WinPE Environment...
+PowerShell -NoProfile -NoLogo -ExecutionPolicy Bypass -File "X:\Windows\System32\Initialize-GlazierWinPE.ps1"
 ECHO Start PowerShell
 start PowerShell -NoProfile -NoLogo -WindowStyle Maximized -NoExit -File "X:\Windows\System32\autobuild.ps1" -config_server {1}
 "@ -f $osd_version, $config_server
