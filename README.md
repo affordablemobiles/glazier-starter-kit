@@ -19,6 +19,8 @@ A production-ready starter kit combining [Google Glazier](https://github.com/goo
   - `blank/`: Windows 11 Blank minimal configuration.
   - `win10-stable/`: Windows 10 Stable configuration.
   - `win10-blank/`: Windows 10 Blank minimal configuration.
+  - `menu/`: Interactive GUI profile chooser for dynamic profile selection.
+  - `profiles.json`: Dynamic profile manifest consumed by the interactive menu ISO.
   - `update-netboot.sh`: Automation script to fetch signed iPXE/wimboot binaries and prepare USB and HTTP netboot files.
 
 ## User-Supplied Assets & Configuration

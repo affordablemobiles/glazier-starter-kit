@@ -560,9 +560,16 @@ if ($storage_upload_path -ne "") {
     gsutil -m cp "C:\OSDCloud\OSDCloud.iso" "$storage_upload_path.iso"
     gsutil -m cp "C:\OSDCloud\OSDCloud.iso" "$storage_upload_path-stable.iso"
 
-    $configs = @("blank", "win10-stable", "win10-blank")
+    $configs = @("menu", "blank", "win10-stable", "win10-blank")
     foreach ($cnf in $configs) {
-        $cnfScript = "$scriptPath\..\glazier-repo\$cnf\autobuild.ps1"
+        $cnfDir = "$scriptPath\..\glazier-repo\$cnf"
+        $cnfScript = "$cnfDir\autobuild.ps1"
+        if (!(Test-Path $cnfScript)) {
+            if (Test-Path "$scriptPath\autobuild-$cnf.ps1") {
+                $cnfDir = $scriptPath
+                $cnfScript = "$scriptPath\autobuild-$cnf.ps1"
+            }
+        }
         if (!(Test-Path $cnfScript)) {
             Write-Log "Warning: Config script $cnfScript not found, skipping $cnf" -Color Yellow
             continue
@@ -571,7 +578,11 @@ if ($storage_upload_path -ne "") {
         $MountMyWindowsImage = Mount-MyWindowsImage -ImagePath "$WorkspacePath\Media\Sources\boot.wim"
         $MountPath = $MountMyWindowsImage.Path
 
-        robocopy "$scriptPath\..\glazier-repo\$cnf\" "$MountPath\Windows\System32\" autobuild.ps1 /PURGE /ndl /njh /njs /np | Out-Null
+        if ($cnfDir -eq $scriptPath) {
+            Copy-Item -Path "$scriptPath\autobuild-$cnf.ps1" -Destination "$MountPath\Windows\System32\autobuild.ps1" -Force
+        } else {
+            robocopy "$cnfDir\" "$MountPath\Windows\System32\" autobuild.ps1 /PURGE /ndl /njh /njs /np | Out-Null
+        }
         $MountMyWindowsImage | Dismount-MyWindowsImage -Save
         New-OSDCloudISO
 

@@ -13,6 +13,8 @@ isset ${menu-default} || set menu-default exit
 
 :start
 menu iPXE boot menu for Glazier
+item --gap --               -----------------  Interactive Chooser (Dynamic GUI) ---------------------
+item --key m menu           Run Glazier with Dynamic GUI Profile Selector
 item --gap --               ---------------------  Glazier Images with MGMT --------------------------
 item --key s windows-stable Run Glazier with windows-stable (Windows 11 Pro) configuration
 item --key d win10-stable   Run Glazier with win10-stable (Windows 10 Pro) configuration
@@ -48,6 +50,16 @@ reboot
 exit
 
 ############ MAIN MENU ITEMS ############
+
+:menu
+echo Booting WinPE for Glazier with interactive GUI profile chooser
+kernel http://storage.googleapis.com/CHANGE_ME/wimboot.x86_64.efi
+initrd http://storage.googleapis.com/CHANGE_ME/menu/autobuild.ps1            autobuild.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/Boot/BCD                      BCD
+initrd http://storage.googleapis.com/CHANGE_ME/Boot/boot.sdi                 boot.sdi
+initrd http://storage.googleapis.com/CHANGE_ME/sources/boot.wim              boot.wim
+boot || goto failed
+goto start
 
 :windows-stable
 echo Booting WinPE for Glazier with windows-stable configuration

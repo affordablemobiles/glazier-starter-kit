@@ -1,0 +1,26 @@
+{
+  "timeout_seconds": 120,
+  "default_profile": "windows-stable",
+  "profiles": [
+    {
+      "id": "windows-stable",
+      "name": "Windows 11 Stable",
+      "description": "Windows 11 with Office 365 & Management Agent"
+    },
+    {
+      "id": "windows-blank",
+      "name": "Windows 11 Blank",
+      "description": "Clean Windows 11 installation with no additional software"
+    },
+    {
+      "id": "win10-stable",
+      "name": "Windows 10 Stable",
+      "description": "Windows 10 22H2 with Office 365 & Management Agent"
+    },
+    {
+      "id": "win10-blank",
+      "name": "Windows 10 Blank",
+      "description": "Clean Windows 10 22H2 installation"
+    }
+  ]
+}
