@@ -957,7 +957,7 @@ $fontFiles = @("segoeui.ttf", "segoeuib.ttf", "segoeuii.ttf", "seguisb.ttf", "co
 foreach ($ff in $fontFiles) {
     $fp = "$fontsDir\$ff"
     if (Test-Path $fp) {
-        [Win32Window]::AddFontResource($fp) | Out-Null
+        [void][Win32Window]::AddFontResource($fp)
     }
 }
 
@@ -978,7 +978,7 @@ if (Test-Path $wallpaperScript) {
 # Minimize (DO NOT Hide) Parent Console so Startnet.cmd is minimised cleanly to the bottom-left
 $consoleHwnd = [Win32Window]::GetConsoleWindow()
 if ($consoleHwnd -ne [IntPtr]::Zero) {
-    [Win32Window]::ShowWindow($consoleHwnd, 6) # SW_MINIMIZE
+    [void][Win32Window]::ShowWindow($consoleHwnd, 6) # SW_MINIMIZE
 }
 
 function Test-WinPENetwork {

@@ -121,7 +121,7 @@ $fontFiles = @("segoeui.ttf", "segoeuib.ttf", "segoeuii.ttf", "seguisb.ttf", "co
 foreach ($ff in $fontFiles) {
     $fp = "$fontsDir\$ff"
     if (Test-Path $fp) {
-        [Win32WindowHelper]::AddFontResource($fp) | Out-Null
+        [void][Win32WindowHelper]::AddFontResource($fp)
     }
 }
 
@@ -144,7 +144,7 @@ function Show-GlazierProfileGUI {
         try {
             $consoleHwnd = [Win32WindowHelper]::GetConsoleWindow()
             if ($consoleHwnd -ne [IntPtr]::Zero) {
-                [Win32WindowHelper]::ShowWindow($consoleHwnd, 6) # SW_MINIMIZE
+                [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 6) # SW_MINIMIZE
             }
         } catch {
             # continue even if console helper fails
@@ -344,7 +344,7 @@ function Show-GlazierProfileGUI {
         $form.Add_Shown({
             try {
                 if ($consoleHwnd -ne [IntPtr]::Zero) {
-                    [Win32WindowHelper]::ShowWindow($consoleHwnd, 6) # SW_MINIMIZE
+                    [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 6) # SW_MINIMIZE
                 }
             } catch {}
             $form.Activate()
@@ -357,7 +357,7 @@ function Show-GlazierProfileGUI {
             # Restore console to Maximized so Glazier imaging logs are visible full-screen
             try {
                 if ($consoleHwnd -ne [IntPtr]::Zero) {
-                    [Win32WindowHelper]::ShowWindow($consoleHwnd, 3) # SW_MAXIMIZE
+                    [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 3) # SW_MAXIMIZE
                 }
             } catch {
                 # ignore restore error
@@ -378,11 +378,14 @@ if ([string]::IsNullOrWhiteSpace($glazier_spec_os)) {
     try {
         $initConsoleHwnd = [Win32WindowHelper]::GetConsoleWindow()
         if ($initConsoleHwnd -ne [IntPtr]::Zero) {
-            [Win32WindowHelper]::ShowWindow($initConsoleHwnd, 6) # SW_MINIMIZE
+            [void][Win32WindowHelper]::ShowWindow($initConsoleHwnd, 6) # SW_MINIMIZE
         }
     } catch {}
     $menuData = Get-GlazierProfiles -BaseUrl $config_server
-    $glazier_spec_os = Show-GlazierProfileGUI -MenuData $menuData
+    $glazier_spec_os = @(Show-GlazierProfileGUI -MenuData $menuData) | Where-Object { $_ -is [string] -and $_.Trim() -ne "" } | Select-Object -Last 1
+    if ($glazier_spec_os) {
+        $glazier_spec_os = $glazier_spec_os.Trim()
+    }
 }
 
 Write-Output "Starting Glazier imaging process with profile: $glazier_spec_os..."
