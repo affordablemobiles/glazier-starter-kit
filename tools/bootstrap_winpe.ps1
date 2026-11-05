@@ -107,7 +107,7 @@ Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Confirm:$f
 
 # Configure PowerShell Gallery repository as trusted for non-interactive builds
 Write-Log "Setting PSGallery repository to Trusted..."
-Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -Confirm:$false -ErrorAction SilentlyContinue
+Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue
 
 # Install OSD and MSCatalog PowerShell Modules (latest available)
 Write-Log "Installing OSD module from PowerShell Gallery..."
@@ -119,6 +119,145 @@ Install-Module -Name MSCatalog -Force -AllowClobber -Confirm:$false -SkipPublish
 Write-Log "Importing OSD & MSCatalog modules..."
 Import-Module OSD -Force
 Import-Module MSCatalog -Force -ErrorAction SilentlyContinue
+
+$enableWinRE = ($use_winre -match '^(true|1|yes)$')
+$forceRefreshWinRE = ($refresh_winre -match '^(true|1|yes)$')
+
+# If WinRE is requested, prepare and service WinRE.wim FIRST, then place it in the ADK directory
+# so New-OSDCloudTemplate builds directly on top of WinRE (preserving both Wi-Fi and all ADK packages)
+if ($enableWinRE) {
+    Write-Log "=== WinRE Mode Requested: Preparing Windows Recovery Environment with Wi-Fi ===" -Color Magenta
+    $cachedWinRE = "$downloadDir\cached_winre.wim"
+    $hasCachedGCS = $false
+    $extractedWinRE = "$downloadDir\winre_extract\Winre.wim"
+
+    if ($storage_boot_upload_path -ne "" -and (-not $forceRefreshWinRE)) {
+        Write-Log "Checking GCS for cached base WinRE image at $storage_boot_upload_path/base/winre.wim..."
+        & gsutil -q stat "$storage_boot_upload_path/base/winre.wim"
+        if ($LASTEXITCODE -eq 0) {
+            Write-Log "Found cached base WinRE in GCS. Downloading..."
+            gsutil -m cp "$storage_boot_upload_path/base/winre.wim" $cachedWinRE
+            if (Test-Path $cachedWinRE) {
+                $hasCachedGCS = $true
+                $extractedWinRE = $cachedWinRE
+            }
+        }
+    }
+
+    if ($hasCachedGCS) {
+        Write-Log "Using cached WinRE from GCS." -Color Green
+    } else {
+        Write-Log "Resolving $winre_os_name ESD download URL from Microsoft OSD catalog..."
+        $osMediaDir = "$downloadDir\OS"
+        if (-not (Test-Path $osMediaDir)) {
+            New-Item -ItemType Directory -Path $osMediaDir -Force | Out-Null
+        }
+        
+        $fu = Get-FeatureUpdate -OSName $winre_os_name -OSLanguage 'en-us' -OSActivation 'Retail'
+        if (-not $fu) {
+            Write-Log "Failed to resolve Feature Update for $winre_os_name from OSD catalog" -Color Red
+            exit 1
+        }
+        
+        $esdFile = "$osMediaDir\$($fu.FileName)"
+        if (-not (Test-Path $esdFile)) {
+            Write-Log "Downloading $($fu.FileName) ($($fu.Build)) from Microsoft CDN..." -Color Yellow
+            Write-Log "URL: $($fu.Url)"
+            & curl.exe -fL --progress-bar -o "$esdFile" "$($fu.Url)"
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $esdFile)) {
+                Write-Log "Download failed via curl.exe" -Color Red
+                exit 1
+            }
+        } else {
+            Write-Log "ESD already exists at $esdFile"
+        }
+
+        Write-Log "Extracting Winre.wim from ESD Index 1 using 7-Zip..."
+        $extractDir = "$downloadDir\winre_extract"
+        New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+        & 'C:\Program Files\7-Zip\7z.exe' e "$esdFile" "1\Windows\System32\Recovery\Winre.wim" -o"$extractDir" -y
+        if (-not (Test-Path "$extractDir\Winre.wim")) {
+            & 'C:\Program Files\7-Zip\7z.exe' e "$esdFile" "6\Windows\System32\Recovery\Winre.wim" -o"$extractDir" -y
+        }
+        $extractedWinRE = (Get-ChildItem -Path $extractDir -Filter 'Winre.wim' -Recurse | Select-Object -First 1).FullName
+
+        if (-not $extractedWinRE -or -not (Test-Path $extractedWinRE)) {
+            Write-Log "Failed to extract Winre.wim from ESD" -Color Red
+            exit 1
+        }
+        Write-Log "Extracted Winre.wim ($([Math]::Round((Get-Item $extractedWinRE).Length / 1MB)) MB)" -Color Green
+
+        Write-Log "Extracting Windows 11 client WLAN/MDM DLLs from ESD Index 1..."
+        $dllExtractDir = "$downloadDir\wlan_dlls"
+        New-Item -ItemType Directory -Path $dllExtractDir -Force | Out-Null
+        & 'C:\Program Files\7-Zip\7z.exe' e "$esdFile" "1\Windows\System32\dmcmnutils.dll" "1\Windows\System32\mdmpostprocessevaluator.dll" "1\Windows\System32\mdmregistration.dll" -o"$dllExtractDir" -y
+        if (-not (Test-Path "$dllExtractDir\dmcmnutils.dll")) {
+            & 'C:\Program Files\7-Zip\7z.exe' e "$esdFile" "6\Windows\System32\dmcmnutils.dll" "6\Windows\System32\mdmpostprocessevaluator.dll" "6\Windows\System32\mdmregistration.dll" -o"$dllExtractDir" -y
+        }
+        Write-Log "Extracted client WLAN DLLs: $(Get-ChildItem $dllExtractDir | Select-Object -ExpandProperty Name)" -Color Green
+
+        Write-Log "Downloading WirelessConnect.exe for WinPE Wi-Fi GUI..."
+        $wirelessConnectUrl = "https://github.com/okieselbach/Helpers/raw/master/WirelessConnect/WirelessConnect/bin/Release/WirelessConnect.exe"
+        $wirelessConnectExe = "$downloadDir\WirelessConnect.exe"
+        try {
+            & curl.exe -fsSL -o "$wirelessConnectExe" "$wirelessConnectUrl"
+            Write-Log "Downloaded WirelessConnect.exe successfully" -Color Green
+        } catch {
+            Write-Log "Warning: Could not download WirelessConnect.exe: $_" -Color Yellow
+        }
+
+        Write-Log "Querying Microsoft Update Catalog for Safe OS Dynamic Updates..."
+        try {
+            $safeOSUpdate = Get-MSCatalogUpdate -Search "Safe OS Dynamic Update Windows 11 24H2" -ErrorAction SilentlyContinue |
+                Where-Object { $_.Title -match 'x64-based' -and $_.Title -match 'Windows 11' } | Select-Object -First 1
+            if ($safeOSUpdate) {
+                Write-Log "Found Safe OS Dynamic Update: $($safeOSUpdate.Title)" -Color Green
+                $updateDir = "$downloadDir\winre_update"
+                New-Item -ItemType Directory -Path $updateDir -Force | Out-Null
+                Save-MSCatalogUpdate -Update $safeOSUpdate -Destination $updateDir
+                $updatePkg = (Get-ChildItem -Path $updateDir -Include *.cab,*.msu -Recurse | Select-Object -First 1).FullName
+
+                if ($updatePkg) {
+                    Write-Log "Mounting Winre.wim to slipstream $updatePkg..."
+                    $mountDir = "$downloadDir\winre_mount"
+                    New-Item -ItemType Directory -Path $mountDir -Force | Out-Null
+                    Mount-WindowsImage -ImagePath $extractedWinRE -Index 1 -Path $mountDir
+                    Write-Log "Adding update package..."
+                    Add-WindowsPackage -Path $mountDir -PackagePath $updatePkg
+                    Write-Log "Performing DISM component cleanup..."
+                    DISM /Image:"$mountDir" /Cleanup-Image /StartComponentCleanup
+                    Write-Log "Dismounting and saving updated WinRE..."
+                    Dismount-WindowsImage -Path $mountDir -Save
+                    Remove-Item -Path $mountDir -Force -Recurse -ErrorAction SilentlyContinue
+                    Write-Log "WinRE slipstreaming completed successfully." -Color Green
+                }
+            } else {
+                Write-Log "No newer Safe OS Dynamic Update found, using release WinRE."
+            }
+        } catch {
+            Write-Log "Warning during Safe OS update servicing: $_" -Color Yellow
+        }
+
+        if ($storage_boot_upload_path -ne "") {
+            Write-Log "Uploading fresh base WinRE to $storage_boot_upload_path/base/winre.wim for future builds..."
+            gsutil -m cp "$extractedWinRE" "$storage_boot_upload_path/base/winre.wim"
+        }
+    }
+
+    # Replace ADK winpe.wim with our serviced WinRE image so New-OSDCloudTemplate layers on top of it
+    $adkWinPEPaths = @(
+        "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment\AMD64\en-us\winpe.wim",
+        "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment\AMD64\winpe.wim"
+    )
+    foreach ($adkP in $adkWinPEPaths) {
+        if (Test-Path (Split-Path -Parent $adkP)) {
+            Copy-Item -Path $extractedWinRE -Destination $adkP -Force
+            Write-Log "Replaced ADK WinPE source with serviced WinRE at $adkP" -Color Green
+        }
+    }
+    # Reset any existing template so New-OSDCloudTemplate rebuilds fresh
+    Remove-Item -Path "C:\ProgramData\OSDCloud" -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 # Create OSDCloud template if not created yet.
 if ((Get-OSDCloudTemplate) -eq "C:\ProgramData\OSDCloud") { 
@@ -166,173 +305,81 @@ if ((Get-OSDCloudTemplate) -eq "C:\ProgramData\OSDCloud") {
     Write-Log "New-OSDCloudTemplate completed successfully." -Color Green
 }
 
-$enableWinRE = ($use_winre -match '^(true|1|yes)$')
-$forceRefreshWinRE = ($refresh_winre -match '^(true|1|yes)$')
-
-# If WinRE is requested, replace ADK winpe.wim with serviced WinRE.wim (enabling native 802.11 Wi-Fi stack)
-if ($enableWinRE) {
-    Write-Log "=== WinRE Mode Requested: Preparing Windows Recovery Environment with Wi-Fi ===" -Color Magenta
-    $cachedWinRE = "$downloadDir\cached_winre.wim"
-    $hasCachedGCS = $false
-
-    if ($storage_boot_upload_path -ne "" -and (-not $forceRefreshWinRE)) {
-        Write-Log "Checking GCS for cached base WinRE image at $storage_boot_upload_path/base/winre.wim..."
-        & gsutil -q stat "$storage_boot_upload_path/base/winre.wim"
-        if ($LASTEXITCODE -eq 0) {
-            Write-Log "Found cached base WinRE in GCS. Downloading..."
-            gsutil -m cp "$storage_boot_upload_path/base/winre.wim" $cachedWinRE
-            if (Test-Path $cachedWinRE) {
-                $hasCachedGCS = $true
-            }
-        }
-    }
-
-    if ($hasCachedGCS) {
-        Write-Log "Using cached WinRE from GCS." -Color Green
-        Copy-Item -Path $cachedWinRE -Destination "C:\ProgramData\OSDCloud\Media\sources\boot.wim" -Force
-    } else {
-        Write-Log "Resolving $winre_os_name ESD download URL from Microsoft OSD catalog..."
-        $osMediaDir = "$downloadDir\OS"
-        if (-not (Test-Path $osMediaDir)) {
-            New-Item -ItemType Directory -Path $osMediaDir -Force | Out-Null
-        }
-        
-        $fu = Get-FeatureUpdate -OSName $winre_os_name -OSLanguage 'en-us' -OSActivation 'Retail'
-        if (-not $fu) {
-            Write-Log "Failed to resolve Feature Update for $winre_os_name from OSD catalog" -Color Red
-            exit 1
-        }
-        
-        $esdFile = "$osMediaDir\$($fu.FileName)"
-        if (-not (Test-Path $esdFile)) {
-            Write-Log "Downloading $($fu.FileName) ($($fu.Build)) from Microsoft CDN..." -Color Yellow
-            Write-Log "URL: $($fu.Url)"
-            & curl.exe -fL --progress-bar -o "$esdFile" "$($fu.Url)"
-            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $esdFile)) {
-                Write-Log "Download failed via curl.exe" -Color Red
-                exit 1
-            }
-        } else {
-            Write-Log "ESD already exists at $esdFile"
-        }
-
-        Write-Log "Extracting Winre.wim from ESD using 7-Zip..."
-        $extractDir = "$downloadDir\winre_extract"
-        New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
-        & 'C:\Program Files\7-Zip\7z.exe' e "$esdFile" -r "Winre.wim" -o"$extractDir" -y
-        $extractedWinRE = (Get-ChildItem -Path $extractDir -Filter 'Winre.wim' -Recurse | Select-Object -First 1).FullName
-
-        if (-not $extractedWinRE -or -not (Test-Path $extractedWinRE)) {
-            Write-Log "Failed to extract Winre.wim from ESD" -Color Red
-            exit 1
-        }
-        Write-Log "Extracted Winre.wim ($([Math]::Round((Get-Item $extractedWinRE).Length / 1MB)) MB)" -Color Green
-
-        Write-Log "Extracting Windows 11 client WLAN/MDM DLLs from ESD..."
-        $dllExtractDir = "$downloadDir\wlan_dlls"
-        New-Item -ItemType Directory -Path $dllExtractDir -Force | Out-Null
-        & 'C:\Program Files\7-Zip\7z.exe' e "$esdFile" -r "dmcmnutils.dll" "mdmpostprocessevaluator.dll" "mdmregistration.dll" -o"$dllExtractDir" -y
-        Write-Log "Extracted client WLAN DLLs: $(Get-ChildItem $dllExtractDir | Select-Object -ExpandProperty Name)" -Color Green
-
-        Write-Log "Downloading WirelessConnect.exe for WinPE Wi-Fi GUI..."
-        $wirelessConnectUrl = "https://github.com/okieselbach/Helpers/raw/master/WirelessConnect/WirelessConnect/bin/Release/WirelessConnect.exe"
-        $wirelessConnectExe = "$downloadDir\WirelessConnect.exe"
-        try {
-            & curl.exe -fsSL -o "$wirelessConnectExe" "$wirelessConnectUrl"
-            Write-Log "Downloaded WirelessConnect.exe successfully" -Color Green
-        } catch {
-            Write-Log "Warning: Could not download WirelessConnect.exe: $_" -Color Yellow
-        }
-
-        Write-Log "Querying Microsoft Update Catalog for Safe OS Dynamic Updates..."
-        try {
-            $safeOSUpdate = Get-MSCatalogUpdate -Search "Safe OS Dynamic Update for Windows 11 Version 24H2 for x64" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($safeOSUpdate) {
-                Write-Log "Found Safe OS Dynamic Update: $($safeOSUpdate.Title)" -Color Green
-                $updateDir = "$downloadDir\winre_update"
-                New-Item -ItemType Directory -Path $updateDir -Force | Out-Null
-                Save-MSCatalogUpdate -Update $safeOSUpdate -Destination $updateDir
-                $updatePkg = (Get-ChildItem -Path $updateDir -Include *.cab,*.msu -Recurse | Select-Object -First 1).FullName
-
-                if ($updatePkg) {
-                    Write-Log "Mounting Winre.wim to slipstream $updatePkg..."
-                    $mountDir = "$downloadDir\winre_mount"
-                    New-Item -ItemType Directory -Path $mountDir -Force | Out-Null
-                    Mount-WindowsImage -ImagePath $extractedWinRE -Index 1 -Path $mountDir
-                    Write-Log "Adding update package..."
-                    Add-WindowsPackage -Path $mountDir -PackagePath $updatePkg
-                    Write-Log "Performing DISM component cleanup..."
-                    DISM /Image:"$mountDir" /Cleanup-Image /StartComponentCleanup
-                    Write-Log "Dismounting and saving updated WinRE..."
-                    Dismount-WindowsImage -Path $mountDir -Save
-                    Remove-Item -Path $mountDir -Force -Recurse -ErrorAction SilentlyContinue
-                    Write-Log "WinRE slipstreaming completed successfully." -Color Green
-                }
-            } else {
-                Write-Log "No newer Safe OS Dynamic Update found, using release WinRE."
-            }
-        } catch {
-            Write-Log "Warning during Safe OS update servicing: $_" -Color Yellow
-        }
-
-        Write-Log "Replacing template boot.wim with serviced WinRE..."
-        Copy-Item -Path $extractedWinRE -Destination "C:\ProgramData\OSDCloud\Media\sources\boot.wim" -Force
-
-        if ($storage_boot_upload_path -ne "") {
-            Write-Log "Uploading fresh base WinRE to $storage_boot_upload_path/base/winre.wim for future builds..."
-            gsutil -m cp "$extractedWinRE" "$storage_boot_upload_path/base/winre.wim"
-        }
-    }
-}
-
 # Create OSDCloud workspace if not created yet (copies Media from template).
-if ((Get-OSDCloudWorkspace) -eq "C:\OSDCloud") {
-    Write-Host "'New-OSDCloudWorkspace -WorkspacePath C:\OSDCloud' already completed"
+if ((Get-OSDCloudWorkspace) -eq "C:\OSDCloud") { 
+    Write-Log "'New-OSDCloudWorkspace -WorkspacePath C:\OSDCloud' already completed" -Color Green
 } else {
-    Write-Host "Running 'New-OSDCloudWorkspace -WorkspacePath C:\OSDCloud'"
+    Write-Log "Running 'New-OSDCloudWorkspace -WorkspacePath C:\OSDCloud'..." -Color Yellow
     New-OSDCloudWorkspace -WorkspacePath C:\OSDCloud
+    Write-Log "OSDCloud workspace created successfully." -Color Green
 }
 
 # Download Python if needed
 if ((Test-Path $pythonSavePath) -eq $False) {
-    Write-Host "Downloading Python $pyVersion"
-    Invoke-WebRequest -Uri $pyEXEUrl -UseBasicParsing -OutFile $pythonSavePath
+    Write-Log "Downloading Python $pyVersion..."
+    & curl.exe -fL --progress-bar -o "$pythonSavePath" "$pyEXEUrl"
 } else {
-    Write-Host "Python $pyVersion was already downloaded"
+    Write-Log "Python $pyVersion was already downloaded."
 }
 
 # Verify hash of Python installer
 while ((Get-FileHash ($pythonSavePath) -Algorithm MD5).Hash -ne $pythonInstallHash) {
-    Write-Host "Python hashes did not match. Removing and redownloading"
+    Write-Log "Python hashes did not match. Removing and redownloading..." -Color Yellow
     rm $pythonSavePath
-    Invoke-WebRequest -Uri $pyEXEUrl -UseBasicParsing -OutFile $pythonSavePath
+    & curl.exe -fL --progress-bar -o "$pythonSavePath" "$pyEXEUrl"
+}
+Write-Log "Python installer hash verified: $pythonInstallHash" -Color Green
+
+# Download Intel Wi-Fi Driver Pack (Wi-Fi 6/6E/7 / AX / BE / AC) from Microsoft Catalog
+# This provides the official Netwtw/Netwaw drivers for both Dell and Lenovo ThinkPads
+$intelWifiDir = "$downloadDir\drivers\IntelWiFi"
+if ($enableWinRE) {
+    Write-Log "Downloading Intel Wi-Fi Driver Pack (Wi-Fi 6/6E/7 / AX / BE) from Microsoft Update Catalog..." -Color Yellow
+    $intelWifiCab = "$downloadDir\IntelWiFi.cab"
+    $intelWifiUrl = "https://catalog.s.download.windowsupdate.com/d/msdownload/update/driver/drvs/2026/08/6be0cd42-ff38-4935-8303-c8a05b5d8537_504f637d63eec71ca35526881acfe2d672b2411c.cab"
+    try {
+        & curl.exe -fL --progress-bar -o "$intelWifiCab" "$intelWifiUrl"
+        if (Test-Path "$intelWifiCab") {
+            New-Item -ItemType Directory -Path "$intelWifiDir" -Force | Out-Null
+            & 'C:\Program Files\7-Zip\7z.exe' x "$intelWifiCab" -o"$intelWifiDir" -y | Out-Null
+            Write-Log "Extracted Intel Wi-Fi drivers to $intelWifiDir" -Color Green
+        }
+    } catch {
+        Write-Log "Warning: Could not download Intel Wi-Fi pack from Microsoft Catalog: $_" -Color Yellow
+    }
 }
 
-# Install OSDCloud driver packs, bundle MSCatalog, and configure wallpaper in a single pass
-Write-Host "Installing OSDCloud driver packs and configuring WinPE..."
-$cloudDrivers = if ($enableWinRE) {
-    @('Dell', 'IntelNet', 'USB', 'LenovoDock', 'WiFi')
-} else {
-    @('Dell', 'IntelNet', 'USB', 'LenovoDock')
-}
+# Install OSDCloud driver packs (Dell Ethernet/Storage, IntelNet, USB, LenovoDock)
+Write-Log "Injecting OSDCloud driver packs (Dell, IntelNet, USB, LenovoDock)..." -Color Yellow
 $editParams = @{
-    CloudDriver     = $cloudDrivers
+    CloudDriver     = @('Dell', 'IntelNet', 'USB', 'LenovoDock')
     PSModuleInstall = @('MSCatalog')
+}
+if ($enableWinRE) {
+    $editParams['WirelessConnect'] = $true
 }
 $wallpaperPath = "$scriptPath\wallpaper.jpg"
 if (Test-Path $wallpaperPath) {
-    Write-Host "Configuring wallpaper for WinPE at $wallpaperPath"
+    Write-Log "Configuring wallpaper for WinPE at $wallpaperPath"
     $editParams['Wallpaper'] = $wallpaperPath
 } else {
     Write-Host "Wallpaper not available."
 }
 Edit-OSDCloudWinPE @editParams
+Write-Log "Edit-OSDCloudWinPE completed." -Color Green
 
 # Mount our WIM. Borrowed from https://github.com/OSDeploy/OSD/blob/master/Public/OSDCloud/Edit-OSDCloud.winpe.ps1
-Write-Log "Mounting WIM for Glazier and Python injection..." -Color Yellow
+Write-Log "Mounting WIM for Glazier, Wi-Fi, and Python injection..." -Color Yellow
 $WorkspacePath = Get-OSDCloudWorkspace -ErrorAction Stop
 $MountMyWindowsImage = Mount-MyWindowsImage -ImagePath "$WorkspacePath\Media\Sources\boot.wim"
 $MountPath = $MountMyWindowsImage.Path
+
+# Inject Intel Wi-Fi drivers if downloaded
+if (Test-Path "$intelWifiDir") {
+    Write-Log "Injecting Intel Wi-Fi drivers into WinPE image..." -Color Yellow
+    Add-WindowsDriver -Path "$MountPath" -Driver "$intelWifiDir" -Recurse -ForceUnsigned | Out-Null
+    Write-Log "Intel Wi-Fi drivers injected successfully." -Color Green
+}
 
 # $pyTargetDir is the directory where Python will get installed
 $pyTargetDir = "$MountPath\Python"
@@ -375,9 +422,9 @@ robocopy "$scriptPath\" "$MountPath\Windows\System32\WindowsPowerShell\v1.0\" pw
 Write-Log "Downloading CA certificates bundle to WIM..."
 & curl.exe -fsSL -o "$MountPath\glazier-resources\ca-certs.crt" "https://curl.se/ca/cacert.pem"
 
-Write-Log "Bundling OSD and MSCatalog modules into WIM..."
-Save-Module -Name OSD -Path "$MountPath\Program Files\WindowsPowerShell\Modules" -Force -AcceptLicense -Confirm:$false
-Save-Module -Name MSCatalog -Path "$MountPath\Program Files\WindowsPowerShell\Modules" -Force -AcceptLicense -Confirm:$false
+Write-Log "Bundling pre-installed OSD and MSCatalog modules into WIM..."
+robocopy "C:\Program Files\WindowsPowerShell\Modules\OSD\" "$MountPath\Program Files\WindowsPowerShell\Modules\OSD\" /E /PURGE /ndl /njh /njs /np | Out-Null
+robocopy "C:\Program Files\WindowsPowerShell\Modules\MSCatalog\" "$MountPath\Program Files\WindowsPowerShell\Modules\MSCatalog\" /E /PURGE /ndl /njh /njs /np | Out-Null
 
 # Copy client WLAN DLLs and WirelessConnect.exe to WinPE if WinRE mode
 if ($enableWinRE) {
@@ -415,13 +462,14 @@ start /wait PowerShell -NoL -C "& {{
         }}
     }}
     Start-Sleep -Seconds 5
-    if (-not (Test-WebConnection)) {{
+    `$activeIP = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {{ `$_.InterfaceAlias -notmatch 'Loopback' -and `$_.IPAddress -notlike '169.254.*' }}
+    if (-not `$activeIP) {{
         Write-Host '[!] No active network connection detected.' -ForegroundColor Yellow
         Write-Host '[*] Prompting for Wi-Fi connection...' -ForegroundColor Cyan
         if (Test-Path 'X:\Windows\WirelessConnect.exe') {{
             Start-Process -FilePath 'X:\Windows\WirelessConnect.exe' -Wait
-        }} elseif (Get-Command Start-WinREWiFi -ErrorAction SilentlyContinue) {{
-            Start-WinREWiFi -WirelessConnect
+        }} elseif (Test-Path 'X:\Windows\System32\WirelessConnect.exe') {{
+            Start-Process -FilePath 'X:\Windows\System32\WirelessConnect.exe' -Wait
         }}
     }} else {{
         Write-Host '[+] Network connection detected.' -ForegroundColor Green
