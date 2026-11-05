@@ -63,11 +63,11 @@ controls:
   - ['autobuild.ps1', 'C:\windows\system32\autobuild.ps1']
 
 #################################################################################################
-# Pre-install the January 2024 cumulative update (kb5033375)                                   #
+# Pre-install cumulative updates                                                                #
 #################################################################################################
 
-- UpdateMSU:
-  - ['https://catalog.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/a9f5de65-91c3-47e7-b987-0ba0468699b8/public/windows11.0-kb5034123-x64_d82c9af459245e90b5bf897f15a72cf810819f31.msu', 'C:\glazier_cache\kb5034123.msu', '349f673b611383d5e2a300d81fb7ad3ceba7226c346993219fecf76c93fc9d67']
+- include:
+  - ['../../common/updates', 'latest-cu.yaml']
 
 - BuildInfoDump: []
 

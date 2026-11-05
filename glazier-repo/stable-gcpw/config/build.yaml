@@ -19,11 +19,11 @@ controls:
 - PSCommand: ['& X:\Windows\System32\bcdboot.exe C:\Windows /c /v']
 
 #################################################################################################
-# Pre-install the July 2024 cumulative update (KB5040442)                                      #
+# Pre-install cumulative updates                                                                #
 #################################################################################################
 
-- UpdateMSU:
-  - ['https://catalog.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/e473615b-077f-40b2-96c2-fa6d3da5c5c7/public/windows11.0-kb5040442-x64_c1ba0e4607fd0ee46254a625c55438ffb70edcd0.msu', 'C:\glazier_cache\KB5040442.msu', '2d014b2d188cccb0fceeebc5cddc3c7d38c8c1794a22ee4c63cee1e9a7f52fc8']
+- include:
+  - ['../../common/updates', 'latest-cu.yaml']
 
 #################################################################################################
 # Prepare MGMT & unattend config                                                                #

@@ -3,6 +3,6 @@ controls:
     winpe: [True]
   MkDir: ['C:\glazier_cache']
   pull:
-  - ['install_latest_cu.py', 'C:\glazier_cache\install_latest_cu.py']
+  - ['/install_latest_cu.py', 'C:\glazier_cache\install_latest_cu.py']
   Execute:
   - ['X:\Python\python.exe C:\glazier_cache\install_latest_cu.py', [0], [], False, False]
