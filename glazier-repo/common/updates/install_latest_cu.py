@@ -73,7 +73,10 @@ def fetch_with_retry(
 
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
           if resp.getcode() == 200:
-            return resp.read().decode('utf-8', errors='ignore')
+            body = resp.read().decode('utf-8', errors='ignore')
+            if 'errorPageDisplayedError' in body or '8DDD0010' in body:
+              raise RuntimeError('Microsoft Update Catalog returned soft error page (8DDD0010)')
+            return body
           raise urllib.error.HTTPError(
               url, resp.getcode(), f'Unexpected HTTP {resp.getcode()}', resp.headers, None
           )

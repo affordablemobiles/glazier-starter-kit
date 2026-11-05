@@ -261,19 +261,70 @@ if ($enableWinRE) {
         }
         Write-Log "Extracted client WLAN DLLs: $(Get-ChildItem $dllExtractDir | Select-Object -ExpandProperty Name)" -Color Green
 
-        Write-Log "Querying Microsoft Update Catalog for Safe OS Dynamic Updates..."
+        $safeOSQuery = "Safe OS Dynamic Update 24H2 x64"
+        Write-Log "Querying Microsoft Update Catalog for Safe OS Dynamic Updates ($safeOSQuery)..."
         $updatePkg = $null
         $catalogRetries = 3
         for ($cAttempt = 1; $cAttempt -le $catalogRetries; $cAttempt++) {
             try {
-                $safeOSUpdate = Get-MSCatalogUpdate -Search "Safe OS Dynamic Update Windows 11 24H2" -ErrorAction Stop |
-                    Where-Object { $_.Title -match 'x64-based' -and $_.Title -match 'Windows 11' } | Select-Object -First 1
-                if ($safeOSUpdate) {
-                    Write-Log "Found Safe OS Dynamic Update: $($safeOSUpdate.Title)" -Color Green
-                    $updateDir = "$downloadDir\winre_update"
-                    New-Item -ItemType Directory -Path $updateDir -Force | Out-Null
-                    Save-MSCatalogUpdate -Update $safeOSUpdate -Destination $updateDir -ErrorAction Stop
-                    $updatePkg = (Get-ChildItem -Path $updateDir -Include *.cab,*.msu -Recurse | Select-Object -First 1).FullName
+                $safeOSUrl = $null
+                $safeOSTitle = $null
+                $updateId = $null
+
+                # Query catalog directly via curl.exe with modern User-Agent to prevent ASP.NET soft errors (8DDD0010)
+                $encodedQuery = [System.Uri]::EscapeDataString($safeOSQuery)
+                $searchHtml = & curl.exe -sSL --retry 3 --connect-timeout 15 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "https://www.catalog.update.microsoft.com/Search.aspx?q=$encodedQuery"
+                if ($searchHtml -match 'errorPageDisplayedError' -or $searchHtml -match '8DDD0010') {
+                    throw "Microsoft Update Catalog returned soft error page (8DDD0010)"
+                }
+
+                if ($searchHtml -match '(?s)<tr\s+id=[\''"]([0-9a-fA-F-]{36})_R\d+[\''"].*?</tr>') {
+                    $rowMatches = [regex]::Matches($searchHtml, '(?s)<tr\s+id=[\''"]([0-9a-fA-F-]{36})_R\d+[\''"].*?</tr>')
+                    foreach ($rm in $rowMatches) {
+                        $rowText = $rm.Value
+                        if ($rowText -match 'Windows 11' -and $rowText -match 'x64' -and $rowText -notmatch 'Server') {
+                            $updateId = $rm.Groups[1].Value
+                            if ($rowText -match 'id=[\''"][0-9a-fA-F-]+_link[\''"][^>]*>\s*(.*?)\s*</a>') {
+                                $safeOSTitle = [System.Net.WebUtility]::HtmlDecode($Matches[1]).Trim()
+                            }
+                            break
+                        }
+                    }
+                }
+
+                if ($updateId) {
+                    Write-Log "Found Safe OS Dynamic Update: $safeOSTitle (ID: $updateId)" -Color Green
+                    $dialogBody = "updateIDs=[{`"size`":0,`"languages`":`"`",`"uidInfo`":`"$updateId`",`"updateID`":`"$updateId`"}]"
+                    $dialogHtml = & curl.exe -sSL --retry 3 --connect-timeout 15 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" `
+                        --data-urlencode "$dialogBody" "https://www.catalog.update.microsoft.com/DownloadDialog.aspx"
+
+                    if ($dialogHtml -match 'downloadInformation\[\d+\]\.files\[\d+\]\.url\s*=\s*[\''"](http[^\''"]+)[\''"]') {
+                        $safeOSUrl = $Matches[1]
+                    } elseif ($dialogHtml -match '(https?://[^\s''"<>]+\.(?:cab|msu))') {
+                        $safeOSUrl = $Matches[1]
+                    }
+
+                    if ($safeOSUrl) {
+                        $safeOSFileName = Split-Path -Leaf ([System.Uri]$safeOSUrl).LocalPath
+                        $updateDir = "$downloadDir\winre_update"
+                        New-Item -ItemType Directory -Path $updateDir -Force | Out-Null
+                        $destFile = "$updateDir\$safeOSFileName"
+                        Invoke-DownloadWithRetry -Url $safeOSUrl -OutFile $destFile -VerifyArchive
+                        $updatePkg = $destFile
+                    }
+                } elseif (Get-Command Get-MSCatalogUpdate -ErrorAction SilentlyContinue) {
+                    # Fallback to MSCatalog module with shortened token query
+                    $safeOSUpdate = Get-MSCatalogUpdate -Search $safeOSQuery -ErrorAction Stop |
+                        Where-Object { $_.Title -match 'x64-based' -and $_.Title -match 'Windows 11' } | Select-Object -First 1
+                    if ($safeOSUpdate) {
+                        Write-Log "Found Safe OS Dynamic Update via MSCatalog: $($safeOSUpdate.Title)" -Color Green
+                        $updateDir = "$downloadDir\winre_update"
+                        New-Item -ItemType Directory -Path $updateDir -Force | Out-Null
+                        Save-MSCatalogUpdate -Update $safeOSUpdate -Destination $updateDir -ErrorAction Stop
+                        $updatePkg = (Get-ChildItem -Path $updateDir -Include *.cab,*.msu -Recurse | Select-Object -First 1).FullName
+                    } else {
+                        Write-Log "No newer Safe OS Dynamic Update found, using release WinRE."
+                    }
                 } else {
                     Write-Log "No newer Safe OS Dynamic Update found, using release WinRE."
                 }
@@ -417,10 +468,70 @@ if ($enableWinRE) {
     Write-Log "Extracted Intel Wi-Fi drivers to $intelWifiDir" -Color Green
 }
 
-# Install OSDCloud driver packs (Dell Ethernet/Storage, IntelNet, USB, LenovoDock)
-Write-Log "Injecting OSDCloud driver packs (Dell, IntelNet, USB, LenovoDock)..." -Color Yellow
+# Resolve and download Dell WinPE 11 Driver Pack from official Dell DriverPackCatalog
+Write-Log "Resolving latest Dell WinPE 11 Driver Pack from Dell DriverPackCatalog.cab..." -Color Cyan
+$dellCatalogCab = "$downloadDir\DriverPackCatalog.cab"
+$dellCatalogXml = "$downloadDir\DriverPackCatalog.xml"
+
+# Fallback to known-good A11 (KHF4P) if catalog parsing ever fails
+$dellDriverUrl = "https://downloads.dell.com/FOLDER15124725M/1/WinPE11.0-Drivers-A11-KHF4P.cab"
+$dellDriverMD5 = "2ac78623e50d468ededd77f6960ff1a1"
+
+try {
+    Invoke-DownloadWithRetry -Url "https://downloads.dell.com/catalog/DriverPackCatalog.cab" -OutFile $dellCatalogCab -VerifyArchive
+    & 'C:\Program Files\7-Zip\7z.exe' e "$dellCatalogCab" "DriverPackCatalog.xml" -o"$downloadDir" -y | Out-Null
+    if (Test-Path $dellCatalogXml) {
+        [xml]$dellXml = Get-Content -Path $dellCatalogXml -Raw
+        $baseLoc = $dellXml.DriverPackManifest.baseLocation
+        if (-not $baseLoc -and $dellXml.DocumentElement) {
+            $baseLoc = $dellXml.DocumentElement.GetAttribute('baseLocation')
+        }
+        $baseLoc = ($baseLoc -as [string]).TrimEnd('/')
+        if (-not $baseLoc) { $baseLoc = "downloads.dell.com" }
+
+        # Select latest WinPE 11 driver pack (or highest WinPE pack matching WinPE11)
+        $dellPackages = $dellXml.DriverPackManifest.DriverPackage
+        if (-not $dellPackages -and $dellXml.DocumentElement) {
+            $dellPackages = $dellXml.GetElementsByTagName('DriverPackage')
+        }
+
+        $winpePkg = $dellPackages |
+            Where-Object { $_.type -eq 'WinPE' -and $_.path -match 'WinPE11' } |
+            Sort-Object { [datetime]$_.dateTime } -Descending |
+            Select-Object -First 1
+
+        if ($winpePkg) {
+            $dellDriverUrl = "https://$baseLoc/$($winpePkg.path.TrimStart('/'))"
+            $dellDriverMD5 = $winpePkg.hashMD5
+            Write-Log "Resolved latest Dell WinPE 11 pack from XML: $($winpePkg.path) (MD5: $dellDriverMD5)" -Color Green
+        }
+    }
+} catch {
+    Write-Log "Warning: Dell catalog XML lookup failed ($_); falling back to pinned A11 (KHF4P)." -Color Yellow
+}
+
+Write-Log "Downloading Dell WinPE 11 Driver Pack ($dellDriverUrl)..." -Color Yellow
+$dellDriverCab = "$downloadDir\DellWinPE11.cab"
+$dellDriverDir = "$downloadDir\drivers\DellWinPE11"
+
+Invoke-DownloadWithRetry -Url $dellDriverUrl -OutFile $dellDriverCab -ExpectedMD5 $dellDriverMD5 -VerifyArchive
+
+if (Test-Path "$dellDriverDir") {
+    Remove-Item -Path "$dellDriverDir" -Recurse -Force -ErrorAction SilentlyContinue
+}
+New-Item -ItemType Directory -Path "$dellDriverDir" -Force | Out-Null
+
+& 'C:\Program Files\7-Zip\7z.exe' x "$dellDriverCab" -o"$dellDriverDir" -y | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Log "CRITICAL: Failed to extract Dell WinPE drivers with 7-Zip (Exit code: $LASTEXITCODE)" -Color Red
+    exit 1
+}
+Write-Log "Extracted Dell WinPE drivers to $dellDriverDir" -Color Green
+
+# Install OSDCloud driver packs (IntelNet, USB, LenovoDock)
+Write-Log "Injecting OSDCloud driver packs (IntelNet, USB, LenovoDock)..." -Color Yellow
 $editParams = @{
-    CloudDriver     = @('Dell', 'IntelNet', 'USB', 'LenovoDock')
+    CloudDriver     = @('IntelNet', 'USB', 'LenovoDock')
     PSModuleInstall = @('MSCatalog')
 }
 if ($enableWinRE) {
@@ -491,6 +602,13 @@ if (Test-Path "$intelWifiDir") {
     Write-Log "Injecting Intel Wi-Fi drivers into WinPE image..." -Color Yellow
     Add-WindowsDriver -Path "$MountPath" -Driver "$intelWifiDir" -Recurse -ForceUnsigned -ErrorAction Stop | Out-Null
     Write-Log "Intel Wi-Fi drivers injected successfully." -Color Green
+}
+
+# Inject Dell WinPE drivers if downloaded
+if (Test-Path "$dellDriverDir") {
+    Write-Log "Injecting Dell WinPE drivers into WinPE image..." -Color Yellow
+    Add-WindowsDriver -Path "$MountPath" -Driver "$dellDriverDir" -Recurse -ForceUnsigned -ErrorAction Stop | Out-Null
+    Write-Log "Dell WinPE drivers injected successfully." -Color Green
 }
 
 # $pyTargetDir is the directory where Python will get installed
