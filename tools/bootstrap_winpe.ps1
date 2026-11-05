@@ -224,6 +224,11 @@ if ($enableWinRE) {
         }
         
         $fu = Get-FeatureUpdate -OSName $winre_os_name -OSLanguage 'en-us' -OSActivation 'Retail'
+        if (-not $fu -and $winre_os_name -match '25H2') {
+            Write-Log "OSD catalog does not have $winre_os_name; falling back to Windows 11 24H2 amd64..." -Color Yellow
+            $winre_os_name = "Windows 11 24H2 amd64"
+            $fu = Get-FeatureUpdate -OSName $winre_os_name -OSLanguage 'en-us' -OSActivation 'Retail'
+        }
         if (-not $fu) {
             Write-Log "Failed to resolve Feature Update for $winre_os_name from OSD catalog" -Color Red
             exit 1
@@ -261,80 +266,108 @@ if ($enableWinRE) {
         }
         Write-Log "Extracted client WLAN DLLs: $(Get-ChildItem $dllExtractDir | Select-Object -ExpandProperty Name)" -Color Green
 
-        $safeOSQuery = "Safe OS Dynamic Update 24H2 x64"
-        Write-Log "Querying Microsoft Update Catalog for Safe OS Dynamic Updates ($safeOSQuery)..."
+        $catalogUrls = @(
+            "https://www.catalog.update.microsoft.com/Search.aspx?q=%22Safe+OS+Dynamic+Update%22+25H2+x64",
+            "https://www.catalog.update.microsoft.com/Search.aspx?q=%22Safe+OS+Dynamic+Update%22+24H2+x64"
+        )
         $updatePkg = $null
         $catalogRetries = 3
-        for ($cAttempt = 1; $cAttempt -le $catalogRetries; $cAttempt++) {
-            try {
-                $safeOSUrl = $null
-                $safeOSTitle = $null
-                $updateId = $null
+        $ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0"
 
-                # Query catalog directly via curl.exe with modern User-Agent to prevent ASP.NET soft errors (8DDD0010)
-                $encodedQuery = [System.Uri]::EscapeDataString($safeOSQuery)
-                $searchHtml = & curl.exe -sSL --retry 3 --connect-timeout 15 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "https://www.catalog.update.microsoft.com/Search.aspx?q=$encodedQuery"
-                if ($searchHtml -match 'errorPageDisplayedError' -or $searchHtml -match '8DDD0010') {
-                    throw "Microsoft Update Catalog returned soft error page (8DDD0010)"
-                }
+        foreach ($catalogSearchUrl in $catalogUrls) {
+            Write-Log "Querying Microsoft Update Catalog for Safe OS Dynamic Updates ($catalogSearchUrl)..."
+            for ($cAttempt = 1; $cAttempt -le $catalogRetries; $cAttempt++) {
+                try {
+                    $safeOSUrl = $null
+                    $safeOSTitle = $null
+                    $updateId = $null
 
-                if ($searchHtml -match '(?s)<tr\s+id=[\''"]([0-9a-fA-F-]{36})_R\d+[\''"].*?</tr>') {
-                    $rowMatches = [regex]::Matches($searchHtml, '(?s)<tr\s+id=[\''"]([0-9a-fA-F-]{36})_R\d+[\''"].*?</tr>')
-                    foreach ($rm in $rowMatches) {
-                        $rowText = $rm.Value
-                        if ($rowText -match 'Windows 11' -and $rowText -match 'x64' -and $rowText -notmatch 'Server') {
-                            $updateId = $rm.Groups[1].Value
-                            if ($rowText -match 'id=[\''"][0-9a-fA-F-]+_link[\''"][^>]*>\s*(.*?)\s*</a>') {
-                                $safeOSTitle = [System.Net.WebUtility]::HtmlDecode($Matches[1]).Trim()
+                    # Query catalog directly via curl.exe with modern User-Agent and headers
+                    $searchHtml = (& curl.exe -sSL --retry 3 --connect-timeout 15 -A $ua `
+                        -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" `
+                        -H "Accept-Language: en-GB,en-US;q=0.9,en;q=0.8" `
+                        $catalogSearchUrl) -join "`n"
+
+                    if ($searchHtml -match 'errorPageDisplayedError' -or $searchHtml -match '8DDD0010') {
+                        throw "Microsoft Update Catalog returned soft error page (8DDD0010)"
+                    }
+
+                    $linkMatches = [regex]::Matches($searchHtml, '(?s)<a\s+[^>]*id=[\''"]([0-9a-fA-F-]{36})_link[\''"][^>]*>\s*(.*?)\s*</a>')
+                    foreach ($m in $linkMatches) {
+                        $candId = $m.Groups[1].Value
+                        $rawTitle = $m.Groups[2].Value
+                        $candTitle = [System.Net.WebUtility]::HtmlDecode($rawTitle)
+                        $candTitle = [regex]::Replace($candTitle, '<[^>]+>', '').Trim()
+                        if ($candTitle -match 'Safe OS Dynamic Update' -and
+                            $candTitle -match 'Windows 11' -and
+                            $candTitle -match '(25H2|24H2)' -and
+                            $candTitle -match 'x64' -and
+                            $candTitle -notmatch 'Server' -and
+                            $candTitle -notmatch 'ARM64') {
+                            $updateId = $candId
+                            $safeOSTitle = $candTitle
+                            break
+                        }
+                    }
+
+                    if ($updateId) {
+                        Write-Log "Found Safe OS Dynamic Update: $safeOSTitle (ID: $updateId)" -Color Green
+                        $dialogBody = "updateIDs=[{`"size`":0,`"languages`":`"`",`"uidInfo`":`"$updateId`",`"updateID`":`"$updateId`"}]"
+                        $dialogHtml = (& curl.exe -sSL --retry 3 --connect-timeout 15 -A $ua `
+                            --data-urlencode "$dialogBody" "https://www.catalog.update.microsoft.com/DownloadDialog.aspx") -join "`n"
+
+                        if ($dialogHtml -match 'downloadInformation\[\d+\]\.files\[\d+\]\.url\s*=\s*[\''"](http[^\''"]+)[\''"]') {
+                            $safeOSUrl = $Matches[1]
+                        } elseif ($dialogHtml -match '(https?://[^\s''"<>]+\.(?:cab|msu))') {
+                            $safeOSUrl = $Matches[1]
+                        }
+
+                        if ($safeOSUrl) {
+                            $safeOSFileName = Split-Path -Leaf ([System.Uri]$safeOSUrl).LocalPath
+                            $updateDir = "$downloadDir\winre_update"
+                            New-Item -ItemType Directory -Path $updateDir -Force | Out-Null
+                            $destFile = "$updateDir\$safeOSFileName"
+                            Invoke-DownloadWithRetry -Url $safeOSUrl -OutFile $destFile -VerifyArchive
+                            $updatePkg = $destFile
+
+                            # Upload to GCS cache for future builds
+                            if ($storage_boot_upload_path -ne "") {
+                                Write-Log "Caching downloaded Safe OS Dynamic Update to $storage_boot_upload_path/base/safeos-du-latest.cab..." -Color Cyan
+                                & gsutil -q cp "$destFile" "$storage_boot_upload_path/base/safeos-du-latest.cab"
                             }
                             break
                         }
                     }
-                }
-
-                if ($updateId) {
-                    Write-Log "Found Safe OS Dynamic Update: $safeOSTitle (ID: $updateId)" -Color Green
-                    $dialogBody = "updateIDs=[{`"size`":0,`"languages`":`"`",`"uidInfo`":`"$updateId`",`"updateID`":`"$updateId`"}]"
-                    $dialogHtml = & curl.exe -sSL --retry 3 --connect-timeout 15 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" `
-                        --data-urlencode "$dialogBody" "https://www.catalog.update.microsoft.com/DownloadDialog.aspx"
-
-                    if ($dialogHtml -match 'downloadInformation\[\d+\]\.files\[\d+\]\.url\s*=\s*[\''"](http[^\''"]+)[\''"]') {
-                        $safeOSUrl = $Matches[1]
-                    } elseif ($dialogHtml -match '(https?://[^\s''"<>]+\.(?:cab|msu))') {
-                        $safeOSUrl = $Matches[1]
+                    break
+                } catch {
+                    Write-Log "Warning: Microsoft Catalog query attempt $cAttempt of $catalogRetries failed for $catalogSearchUrl: $_" -Color Yellow
+                    if ($cAttempt -lt $catalogRetries) {
+                        Start-Sleep -Seconds (5 * $cAttempt)
                     }
-
-                    if ($safeOSUrl) {
-                        $safeOSFileName = Split-Path -Leaf ([System.Uri]$safeOSUrl).LocalPath
-                        $updateDir = "$downloadDir\winre_update"
-                        New-Item -ItemType Directory -Path $updateDir -Force | Out-Null
-                        $destFile = "$updateDir\$safeOSFileName"
-                        Invoke-DownloadWithRetry -Url $safeOSUrl -OutFile $destFile -VerifyArchive
-                        $updatePkg = $destFile
-                    }
-                } elseif (Get-Command Get-MSCatalogUpdate -ErrorAction SilentlyContinue) {
-                    # Fallback to MSCatalog module with shortened token query
-                    $safeOSUpdate = Get-MSCatalogUpdate -Search $safeOSQuery -ErrorAction Stop |
-                        Where-Object { $_.Title -match 'x64-based' -and $_.Title -match 'Windows 11' } | Select-Object -First 1
-                    if ($safeOSUpdate) {
-                        Write-Log "Found Safe OS Dynamic Update via MSCatalog: $($safeOSUpdate.Title)" -Color Green
-                        $updateDir = "$downloadDir\winre_update"
-                        New-Item -ItemType Directory -Path $updateDir -Force | Out-Null
-                        Save-MSCatalogUpdate -Update $safeOSUpdate -Destination $updateDir -ErrorAction Stop
-                        $updatePkg = (Get-ChildItem -Path $updateDir -Include *.cab,*.msu -Recurse | Select-Object -First 1).FullName
-                    } else {
-                        Write-Log "No newer Safe OS Dynamic Update found, using release WinRE."
-                    }
-                } else {
-                    Write-Log "No newer Safe OS Dynamic Update found, using release WinRE."
-                }
-                break
-            } catch {
-                Write-Log "Warning: Microsoft Catalog query/download attempt $cAttempt of $catalogRetries failed: $_" -Color Yellow
-                if ($cAttempt -lt $catalogRetries) {
-                    Start-Sleep -Seconds (5 * $cAttempt)
                 }
             }
+            if ($updatePkg) {
+                break
+            }
+        }
+
+        # If Microsoft Catalog query failed, check GCS cache for previously cached Safe OS update
+        if (-not $updatePkg -and $storage_boot_upload_path -ne "") {
+            Write-Log "Checking GCS for cached Safe OS Dynamic Update at $storage_boot_upload_path/base/safeos-du-latest.cab..." -Color Cyan
+            & gsutil -q stat "$storage_boot_upload_path/base/safeos-du-latest.cab"
+            if ($LASTEXITCODE -eq 0) {
+                $cachedCab = "$downloadDir\winre_update\safeos-du-latest.cab"
+                New-Item -ItemType Directory -Path (Split-Path -Parent $cachedCab) -Force | Out-Null
+                gsutil -m cp "$storage_boot_upload_path/base/safeos-du-latest.cab" $cachedCab
+                if (Test-Path $cachedCab) {
+                    Write-Log "Using cached Safe OS Dynamic Update from GCS." -Color Green
+                    $updatePkg = $cachedCab
+                }
+            }
+        }
+
+        if (-not $updatePkg) {
+            Write-Log "No newer Safe OS Dynamic Update found, using release WinRE."
         }
 
         # Mount base WinRE to slipstream updates, client WLAN DLLs, and WirelessConnect.exe

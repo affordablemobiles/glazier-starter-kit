@@ -54,7 +54,16 @@ def fetch_with_retry(
     timeout: int = 30,
 ) -> str:
   """Performs an HTTP GET/POST request with exponential backoff and SSL fallback."""
-  req_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+  req_headers = {
+      'User-Agent': (
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          ' (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0'
+      ),
+      'Accept': (
+          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      ),
+      'Accept-Language': 'en-GB,en-US;q=0.9,en;q=0.8',
+  }
   if headers:
     req_headers.update(headers)
 
@@ -191,8 +200,8 @@ def detect_offline_os(target_drive: str = r'C:\\') -> tuple:
 
 def find_latest_cu_update_id(os_name: str, os_ver: str, arch: str = 'x64') -> tuple:
   """Searches the Microsoft Update Catalog for the latest monthly Cumulative Update."""
-  query = f'Cumulative Update for {os_name} Version {os_ver} for {arch}-based Systems'
-  search_url = CATALOG_SEARCH_URL.format(urllib.parse.quote(query))
+  query = f'"Cumulative Update for {os_name}" {os_ver} {arch}'
+  search_url = CATALOG_SEARCH_URL.format(urllib.parse.quote_plus(query))
   logging.info('Searching Microsoft Update Catalog: "%s"', query)
 
   page_html = fetch_with_retry(search_url)
