@@ -328,6 +328,12 @@ def resolve_layered_msu_packages(update_id: str, cache_dir: str) -> list:
 
 
 def main():
+  logging.basicConfig(
+      level=logging.INFO,
+      format='%(asctime)s [%(levelname)s] %(message)s',
+      datefmt='%H:%M:%S',
+  )
+
   parser = argparse.ArgumentParser(
       description='Resolve and install latest Windows Cumulative Update via Glazier UpdateMSU.'
   )

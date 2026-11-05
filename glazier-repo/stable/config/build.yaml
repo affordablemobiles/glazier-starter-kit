@@ -22,8 +22,11 @@ controls:
 # Pre-install cumulative updates                                                                #
 #################################################################################################
 
-- include:
-  - ['../../common/updates', 'latest-cu.yaml']
+- pull:
+  - ['https://storage.googleapis.com/a1comms-glazier-config/common/updates/install_latest_cu.py', 'C:\glazier_cache\install_latest_cu.py']
+
+- Execute:
+  - ['X:\Python\python.exe C:\glazier_cache\install_latest_cu.py', [0], [], False, False]
 
 #################################################################################################
 # Prepare MGMT & unattend config                                                                #
