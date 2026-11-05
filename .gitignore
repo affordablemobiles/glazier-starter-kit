@@ -1,5 +1,7 @@
 tools/autobuild.json
 *.iso
+__pycache__/
+*.py[cod]
 /glazier/*
 /glazier-repo/Boot
 /glazier-repo/*/config/*/*.exe

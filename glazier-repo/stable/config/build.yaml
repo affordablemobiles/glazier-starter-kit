@@ -19,12 +19,11 @@ controls:
 - PSCommand: ['& X:\Windows\System32\bcdboot.exe C:\Windows /c /v']
 
 #################################################################################################
-# Pre-install cumulative updates (KB5043080 checkpoint + October 2026 KB5134133)                #
+# Pre-install cumulative updates                                                                #
 #################################################################################################
 
-- UpdateMSU:
-  - ['https://catalog.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/d8b7f92b-bd35-4b4c-96e5-46ce984b31e0/public/windows11.0-kb5043080-x64_953449672073f8fb99badb4cc6d5d7849b9c83e8.msu', 'C:\glazier_cache\kb5043080.msu', '819632610a101af11c72907fb13ff05b5fb4222c0e263ee9a03bcc1d1d5f26a4']
-  - ['https://catalog.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/4d03ecda-f542-4c31-a4dc-a74fe3ce721f/public/windows11.0-kb5134133-x64_0e59d2f988a5422dfb489e97faed3b3835fc7568.msu', 'C:\glazier_cache\kb5134133.msu', 'cdd9d082a87c131f2ecff346717e163c23d3dadc323fa8faed00826d8e135872']
+- include:
+  - ['../../common/updates', 'latest-cu.yaml']
 
 #################################################################################################
 # Prepare MGMT & unattend config                                                                #
