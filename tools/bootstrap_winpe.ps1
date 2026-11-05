@@ -123,6 +123,19 @@ Import-Module MSCatalog -Force -ErrorAction SilentlyContinue
 $enableWinRE = ($use_winre -match '^(true|1|yes)$')
 $forceRefreshWinRE = ($refresh_winre -match '^(true|1|yes)$')
 
+# Always ensure WirelessConnect.exe is downloaded whenever WinRE is enabled
+$wirelessConnectUrl = "https://github.com/okieselbach/Helpers/raw/master/WirelessConnect/WirelessConnect/bin/Release/WirelessConnect.exe"
+$wirelessConnectExe = "$downloadDir\WirelessConnect.exe"
+if ($enableWinRE -and (-not (Test-Path $wirelessConnectExe))) {
+    Write-Log "Downloading WirelessConnect.exe for WinPE Wi-Fi GUI..."
+    try {
+        & curl.exe -fsSL -o "$wirelessConnectExe" "$wirelessConnectUrl"
+        Write-Log "Downloaded WirelessConnect.exe successfully" -Color Green
+    } catch {
+        Write-Log "Warning: Could not download WirelessConnect.exe: $_" -Color Yellow
+    }
+}
+
 # If WinRE is requested, prepare and service WinRE.wim FIRST, then place it in the ADK directory
 # so New-OSDCloudTemplate builds directly on top of WinRE (preserving both Wi-Fi and all ADK packages)
 if ($enableWinRE) {
@@ -196,17 +209,8 @@ if ($enableWinRE) {
         }
         Write-Log "Extracted client WLAN DLLs: $(Get-ChildItem $dllExtractDir | Select-Object -ExpandProperty Name)" -Color Green
 
-        Write-Log "Downloading WirelessConnect.exe for WinPE Wi-Fi GUI..."
-        $wirelessConnectUrl = "https://github.com/okieselbach/Helpers/raw/master/WirelessConnect/WirelessConnect/bin/Release/WirelessConnect.exe"
-        $wirelessConnectExe = "$downloadDir\WirelessConnect.exe"
-        try {
-            & curl.exe -fsSL -o "$wirelessConnectExe" "$wirelessConnectUrl"
-            Write-Log "Downloaded WirelessConnect.exe successfully" -Color Green
-        } catch {
-            Write-Log "Warning: Could not download WirelessConnect.exe: $_" -Color Yellow
-        }
-
         Write-Log "Querying Microsoft Update Catalog for Safe OS Dynamic Updates..."
+        $updatePkg = $null
         try {
             $safeOSUpdate = Get-MSCatalogUpdate -Search "Safe OS Dynamic Update Windows 11 24H2" -ErrorAction SilentlyContinue |
                 Where-Object { $_.Title -match 'x64-based' -and $_.Title -match 'Windows 11' } | Select-Object -First 1
@@ -216,27 +220,41 @@ if ($enableWinRE) {
                 New-Item -ItemType Directory -Path $updateDir -Force | Out-Null
                 Save-MSCatalogUpdate -Update $safeOSUpdate -Destination $updateDir
                 $updatePkg = (Get-ChildItem -Path $updateDir -Include *.cab,*.msu -Recurse | Select-Object -First 1).FullName
-
-                if ($updatePkg) {
-                    Write-Log "Mounting Winre.wim to slipstream $updatePkg..."
-                    $mountDir = "$downloadDir\winre_mount"
-                    New-Item -ItemType Directory -Path $mountDir -Force | Out-Null
-                    Mount-WindowsImage -ImagePath $extractedWinRE -Index 1 -Path $mountDir
-                    Write-Log "Adding update package..."
-                    Add-WindowsPackage -Path $mountDir -PackagePath $updatePkg
-                    Write-Log "Performing DISM component cleanup..."
-                    DISM /Image:"$mountDir" /Cleanup-Image /StartComponentCleanup
-                    Write-Log "Dismounting and saving updated WinRE..."
-                    Dismount-WindowsImage -Path $mountDir -Save
-                    Remove-Item -Path $mountDir -Force -Recurse -ErrorAction SilentlyContinue
-                    Write-Log "WinRE slipstreaming completed successfully." -Color Green
-                }
             } else {
                 Write-Log "No newer Safe OS Dynamic Update found, using release WinRE."
             }
         } catch {
             Write-Log "Warning during Safe OS update servicing: $_" -Color Yellow
         }
+
+        # Mount base WinRE to slipstream updates, client WLAN DLLs, and WirelessConnect.exe
+        Write-Log "Servicing base Winre.wim (updates, client WLAN DLLs, and Wi-Fi GUI)..."
+        $mountDir = "$downloadDir\winre_mount"
+        New-Item -ItemType Directory -Path $mountDir -Force | Out-Null
+        Mount-WindowsImage -ImagePath $extractedWinRE -Index 1 -Path $mountDir
+
+        if ($updatePkg) {
+            Write-Log "Adding Safe OS update package..."
+            Add-WindowsPackage -Path $mountDir -PackagePath $updatePkg
+        }
+
+        if (Test-Path "$dllExtractDir") {
+            Write-Log "Injecting client WLAN DLLs into base WinRE..."
+            robocopy "$dllExtractDir" "$mountDir\Windows\System32" dmcmnutils.dll mdmpostprocessevaluator.dll mdmregistration.dll /ndl /njh /njs /b /np | Out-Null
+        }
+
+        if (Test-Path "$wirelessConnectExe") {
+            Write-Log "Injecting WirelessConnect.exe into base WinRE..."
+            Copy-Item -Path "$wirelessConnectExe" -Destination "$mountDir\Windows\WirelessConnect.exe" -Force
+            Copy-Item -Path "$wirelessConnectExe" -Destination "$mountDir\Windows\System32\WirelessConnect.exe" -Force
+        }
+
+        Write-Log "Performing DISM component cleanup on base WinRE..."
+        DISM /Image:"$mountDir" /Cleanup-Image /StartComponentCleanup
+        Write-Log "Dismounting and saving serviced base WinRE..."
+        Dismount-WindowsImage -Path $mountDir -Save
+        Remove-Item -Path $mountDir -Force -Recurse -ErrorAction SilentlyContinue
+        Write-Log "Base WinRE servicing completed." -Color Green
 
         if ($storage_boot_upload_path -ne "") {
             Write-Log "Uploading fresh base WinRE to $storage_boot_upload_path/base/winre.wim for future builds..."
@@ -252,6 +270,7 @@ if ($enableWinRE) {
     foreach ($adkP in $adkWinPEPaths) {
         if (Test-Path (Split-Path -Parent $adkP)) {
             Copy-Item -Path $extractedWinRE -Destination $adkP -Force
+            & attrib.exe -r -s -h "$adkP"
             Write-Log "Replaced ADK WinPE source with serviced WinRE at $adkP" -Color Green
         }
     }
@@ -454,31 +473,11 @@ X:\Windows\System32\reg.exe import "X:\Windows\System32\WindowsPowerShell\v1.0\p
 ECHO Initialize Hardware
 start /wait PowerShell -Nol -W Mi -C Start-Sleep -Seconds 10
 ECHO Checking Network Connectivity...
-start /wait PowerShell -NoL -C "& {{
-    # Start WLAN service if installed in WinPE
-    if (Get-Service WlanSvc -ErrorAction SilentlyContinue) {{
-        if ((Get-Service WlanSvc).Status -ne 'Running') {{
-            Start-Service WlanSvc -ErrorAction SilentlyContinue
-        }}
-    }}
-    Start-Sleep -Seconds 5
-    `$activeIP = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {{ `$_.InterfaceAlias -notmatch 'Loopback' -and `$_.IPAddress -notlike '169.254.*' }}
-    if (-not `$activeIP) {{
-        Write-Host '[!] No active network connection detected.' -ForegroundColor Yellow
-        Write-Host '[*] Prompting for Wi-Fi connection...' -ForegroundColor Cyan
-        if (Test-Path 'X:\Windows\WirelessConnect.exe') {{
-            Start-Process -FilePath 'X:\Windows\WirelessConnect.exe' -Wait
-        }} elseif (Test-Path 'X:\Windows\System32\WirelessConnect.exe') {{
-            Start-Process -FilePath 'X:\Windows\System32\WirelessConnect.exe' -Wait
-        }}
-    }} else {{
-        Write-Host '[+] Network connection detected.' -ForegroundColor Green
-    }}
-}}"
+start /wait PowerShell -NoL -C "& {{ if (Get-Service WlanSvc -ErrorAction SilentlyContinue) {{ if ((Get-Service WlanSvc).Status -ne 'Running') {{ Start-Service WlanSvc -ErrorAction SilentlyContinue }} }}; Start-Sleep -Seconds 5; `$activeIP = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {{ `$_.InterfaceAlias -notmatch 'Loopback' -and `$_.IPAddress -notlike '169.254.*' }}; if (-not `$activeIP) {{ Write-Host '[!] No active network connection detected. Prompting for Wi-Fi...' -ForegroundColor Yellow; if (Test-Path 'X:\Windows\WirelessConnect.exe') {{ Start-Process -FilePath 'X:\Windows\WirelessConnect.exe' -Wait }} elseif (Test-Path 'X:\Windows\System32\WirelessConnect.exe') {{ Start-Process -FilePath 'X:\Windows\System32\WirelessConnect.exe' -Wait }}; Start-Sleep -Seconds 5 }} else {{ Write-Host '[+] Network connection detected.' -ForegroundColor Green }} }}"
 ECHO Checking OSD PowerShell Module Updates (Minimized)
-start /wait PowerShell -NoL -W Mi -C "& {{if (Test-WebConnection) {{[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Install-Module OSD -Force -AllowClobber -SkipPublisherCheck -Verbose}}}}"
+start /wait PowerShell -NoL -W Mi -C "& {{Import-Module OSD -ErrorAction SilentlyContinue; if (Test-WebConnection) {{[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Install-Module OSD -Force -AllowClobber -SkipPublisherCheck -Verbose}}}}"
 ECHO Checking MSCatalog PowerShell Module Updates (Minimized)
-start /wait PowerShell -NoL -W Mi -C "& {{if (Test-WebConnection) {{[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Install-Module MSCatalog -Force -AllowClobber -SkipPublisherCheck -Verbose}}}}"
+start /wait PowerShell -NoL -W Mi -C "& {{Import-Module OSD -ErrorAction SilentlyContinue; if (Test-WebConnection) {{[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Install-Module MSCatalog -Force -AllowClobber -SkipPublisherCheck -Verbose}}}}"
 ECHO Initialize PowerShell (Minimized)
 start PowerShell -Nol -W Mi
 @ECHO ON
