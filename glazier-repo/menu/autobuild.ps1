@@ -382,12 +382,12 @@ function Show-GlazierProfileGUI {
             # Restore console to Maximized so Glazier imaging logs are visible full-screen
             try {
                 if ($consoleHwnd -ne [IntPtr]::Zero) {
+                    [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 9) # SW_RESTORE
+                    Start-Sleep -Milliseconds 50
                     [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 3) # SW_MAXIMIZE
                 }
                 [Win32WindowHelper]::DisableQuickEdit()
-                $rawUI = $Host.UI.RawUI
-                $rawUI.CursorPosition = New-Object System.Management.Automation.Host.Coordinates(0, $rawUI.CursorPosition.Y)
-                $rawUI.WindowPosition = New-Object System.Management.Automation.Host.Coordinates(0, [Math]::Max(0, $rawUI.CursorPosition.Y - $rawUI.WindowSize.Height + 1))
+                [void][System.Console]::WriteLine()
             } catch {
                 # ignore restore error
             }
@@ -419,10 +419,14 @@ Write-Output "Starting Glazier imaging process with profile: $glazier_spec_os...
 
 # Ensure console auto-scrolls properly to bottom and QuickEdit is disabled
 try {
+    $currentConsoleHwnd = [Win32WindowHelper]::GetConsoleWindow()
+    if ($currentConsoleHwnd -ne [IntPtr]::Zero) {
+        [void][Win32WindowHelper]::ShowWindow($currentConsoleHwnd, 9) # SW_RESTORE
+        Start-Sleep -Milliseconds 50
+        [void][Win32WindowHelper]::ShowWindow($currentConsoleHwnd, 3) # SW_MAXIMIZE
+    }
     [Win32WindowHelper]::DisableQuickEdit()
-    $rawUI = $Host.UI.RawUI
-    $rawUI.CursorPosition = New-Object System.Management.Automation.Host.Coordinates(0, $rawUI.CursorPosition.Y)
-    $rawUI.WindowPosition = New-Object System.Management.Automation.Host.Coordinates(0, [Math]::Max(0, $rawUI.CursorPosition.Y - $rawUI.WindowSize.Height + 1))
+    [void][System.Console]::WriteLine()
 } catch {}
 
 # For a full list of Glazier flags, execute `python autobuild.py --helpfull`

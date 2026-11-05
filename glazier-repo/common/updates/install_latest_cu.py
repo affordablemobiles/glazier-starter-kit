@@ -346,6 +346,13 @@ def main():
       datefmt='%H:%M:%S',
   )
 
+  try:
+    from absl import flags  # pylint: disable=g-import-not-at-top
+    if not flags.FLAGS.is_parsed():
+      flags.FLAGS(sys.argv[:1], known_only=True)
+  except ImportError:
+    pass
+
   parser = argparse.ArgumentParser(
       description='Resolve and install latest Windows Cumulative Update via Glazier UpdateMSU.'
   )
