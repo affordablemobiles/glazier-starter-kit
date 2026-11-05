@@ -427,11 +427,55 @@ if ($enableWinRE) {
     $editParams['WirelessConnect'] = $true
 }
 $wallpaperPath = "$scriptPath\wallpaper.jpg"
+$tempLogoPng   = "$downloadDir\logo.png"
+$convertedJpg  = "$downloadDir\logo_wallpaper.jpg"
+
+if ($config_server -ne "") {
+    $remoteLogoUrl = "$($config_server.TrimEnd('/'))/logo.png"
+    Write-Log "Checking for custom logo at $remoteLogoUrl..." -Color Cyan
+    & curl.exe -fsSL --retry 3 --retry-delay 3 --connect-timeout 15 -o "$tempLogoPng" "$remoteLogoUrl"
+}
+
+if ((-not (Test-Path $tempLogoPng) -or (Get-Item $tempLogoPng).Length -eq 0) -and $storage_boot_upload_path -ne "") {
+    Write-Log "Checking GCS via gsutil for custom logo at $storage_boot_upload_path/logo.png..." -Color Cyan
+    & gsutil -q cp "$storage_boot_upload_path/logo.png" "$tempLogoPng" 2>$null
+}
+
+if ((Test-Path $tempLogoPng) -and (Get-Item $tempLogoPng).Length -gt 0) {
+    Write-Log "Converting downloaded logo.png to high-quality JPEG for WinPE/WinRE wallpaper..." -Color Green
+    Add-Type -AssemblyName System.Drawing
+    $img = [System.Drawing.Image]::FromFile($tempLogoPng)
+    try {
+        # Convert to 24-bit RGB Bitmap first (handles 8-bit indexed iPXE PNGs cleanly)
+        $rgbBmp = New-Object System.Drawing.Bitmap($img.Width, $img.Height, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
+        $g = [System.Drawing.Graphics]::FromImage($rgbBmp)
+        try {
+            $g.DrawImage($img, 0, 0, $img.Width, $img.Height)
+        } finally {
+            $g.Dispose()
+        }
+        try {
+            $jpegCodec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() |
+                         Where-Object { $_.MimeType -eq 'image/jpeg' }
+            $encoderParams = New-Object System.Drawing.Imaging.EncoderParameters(1)
+            $encoderParams.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter(
+                [System.Drawing.Imaging.Encoder]::Quality, [long]100
+            )
+            $rgbBmp.Save($convertedJpg, $jpegCodec, $encoderParams)
+            $wallpaperPath = $convertedJpg
+        } finally {
+            $rgbBmp.Dispose()
+        }
+    } finally {
+        $img.Dispose()
+    }
+}
+
 if (Test-Path $wallpaperPath) {
-    Write-Log "Configuring wallpaper for WinPE at $wallpaperPath"
+    Write-Log "Configuring wallpaper for WinPE at $wallpaperPath" -Color Green
     $editParams['Wallpaper'] = $wallpaperPath
 } else {
-    Write-Host "Wallpaper not available."
+    Write-Log "Wallpaper not available." -Color Yellow
 }
 Edit-OSDCloudWinPE @editParams
 Write-Log "Edit-OSDCloudWinPE completed." -Color Green
@@ -513,6 +557,185 @@ if ($enableWinRE) {
     }
 }
 
+Write-Log "Configuring offline WinPE registry wallpaper defaults..." -Color Cyan
+& reg.exe load "HKLM\WinPE_Default" "$MountPath\Windows\System32\Config\DEFAULT" | Out-Null
+& reg.exe add "HKLM\WinPE_Default\Control Panel\Desktop" /v WallpaperStyle /t REG_SZ /d "10" /f | Out-Null
+& reg.exe add "HKLM\WinPE_Default\Control Panel\Desktop" /v TileWallpaper /t REG_SZ /d "0" /f | Out-Null
+& reg.exe add "HKLM\WinPE_Default\Control Panel\Colors" /v Background /t REG_SZ /d "0 0 0" /f | Out-Null
+& reg.exe unload "HKLM\WinPE_Default" | Out-Null
+
+Write-Log "Writing Set-WinPEWallpaper.ps1 (resolution cascade + bottom-left crop) to System32..." -Color Cyan
+$wallpaperScriptPath = "$MountPath\Windows\System32\Set-WinPEWallpaper.ps1"
+$wallpaperScriptContent = @'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+$win32Source = @"
+using System;
+using System.Runtime.InteropServices;
+
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+public struct DEVMODE {
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+    public string dmDeviceName;
+    public short dmSpecVersion;
+    public short dmDriverVersion;
+    public short dmSize;
+    public short dmDriverExtra;
+    public int dmFields;
+    public int dmPositionX;
+    public int dmPositionY;
+    public int dmDisplayOrientation;
+    public int dmDisplayFixedOutput;
+    public short dmColor;
+    public short dmDuplex;
+    public short dmYResolution;
+    public short dmTTOption;
+    public short dmCollate;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+    public string dmFormName;
+    public short dmLogPixels;
+    public int dmBitsPerPel;
+    public int dmPelsWidth;
+    public int dmPelsHeight;
+    public int dmDisplayFlags;
+    public int dmDisplayFrequency;
+    public int dmICMMethod;
+    public int dmICMIntent;
+    public int dmMediaType;
+    public int dmDitherType;
+    public int dmReserved1;
+    public int dmReserved2;
+    public int dmPanningWidth;
+    public int dmPanningHeight;
+}
+
+public class WinPEGraphics {
+    [DllImport("user32.dll", CharSet = CharSet.Ansi)]
+    public static extern int EnumDisplaySettings(string lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
+
+    [DllImport("user32.dll", CharSet = CharSet.Ansi)]
+    public static extern int ChangeDisplaySettings(ref DEVMODE lpDevMode, int dwFlags);
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
+
+    public const int ENUM_CURRENT_SETTINGS = -1;
+    public const int DM_PELSWIDTH = 0x00080000;
+    public const int DM_PELSHEIGHT = 0x00100000;
+    public const int CDS_TEST = 0x00000002;
+    public const int CDS_UPDATEREGISTRY = 0x00000001;
+    public const int DISP_CHANGE_SUCCESSFUL = 0;
+
+    public static bool TrySetResolution(int width, int height) {
+        DEVMODE dm = new DEVMODE();
+        dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+        if (EnumDisplaySettings(null, ENUM_CURRENT_SETTINGS, ref dm) == 0) {
+            return false;
+        }
+        if (dm.dmPelsWidth == width && dm.dmPelsHeight == height) {
+            return true;
+        }
+        dm.dmPelsWidth = width;
+        dm.dmPelsHeight = height;
+        dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+
+        if (ChangeDisplaySettings(ref dm, CDS_TEST) == DISP_CHANGE_SUCCESSFUL) {
+            return ChangeDisplaySettings(ref dm, CDS_UPDATEREGISTRY) == DISP_CHANGE_SUCCESSFUL;
+        }
+        return false;
+    }
+}
+"@
+
+Add-Type -TypeDefinition $win32Source -ErrorAction SilentlyContinue
+
+# 1. Cascading resolution fallback matching iPXE menu:
+#    1920x1080 -> 1366x768 (or 1360x768) -> 1024x768 -> keep current
+$candidateResolutions = @(
+    @{ W = 1920; H = 1080 },
+    @{ W = 1366; H = 768  },
+    @{ W = 1360; H = 768  },
+    @{ W = 1024; H = 768  }
+)
+
+foreach ($res in $candidateResolutions) {
+    if ([WinPEGraphics]::TrySetResolution($res.W, $res.H)) {
+        Start-Sleep -Milliseconds 250
+        break
+    }
+}
+
+# 2. Crop and scale wallpaper retaining bottom-left (X = 0, Y = Bottom)
+$srcPath = "$env:SystemRoot\System32\winpe.jpg"
+$dstPath = "$env:TEMP\winpe_cropped.jpg"
+if (-not (Test-Path $srcPath)) { exit 0 }
+
+$screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+$targetW = [int]$screen.Width
+$targetH = [int]$screen.Height
+if ($targetW -le 0 -or $targetH -le 0) { exit 0 }
+
+$srcImg = [System.Drawing.Image]::FromFile($srcPath)
+try {
+    $srcW = [double]$srcImg.Width
+    $srcH = [double]$srcImg.Height
+    $targetAspect = [double]$targetW / [double]$targetH
+    $srcAspect    = $srcW / $srcH
+
+    if ([Math]::Abs($srcAspect - $targetAspect) -lt 0.01) {
+        # Matching aspect ratio (e.g. 1920x1080 or 1366x768): use full image
+        $cropX = 0
+        $cropY = 0
+        $cropW = [int]$srcW
+        $cropH = [int]$srcH
+    } elseif ($srcAspect -gt $targetAspect) {
+        # Narrower screen (e.g. 4:3 1024x768): retain full height and left edge (X = 0), crop right
+        $cropH = [int]$srcH
+        $cropW = [int][Math]::Round($srcH * $targetAspect)
+        $cropX = 0
+        $cropY = 0
+    } else {
+        # Wider screen (e.g. 21:9): retain full width and bottom edge (Y = srcH - cropH), crop top
+        $cropW = [int]$srcW
+        $cropH = [int][Math]::Round($srcW / $targetAspect)
+        $cropX = 0
+        $cropY = [int]($srcH - $cropH)
+    }
+
+    $bmp = New-Object System.Drawing.Bitmap($targetW, $targetH, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
+    $graphics = [System.Drawing.Graphics]::FromImage($bmp)
+    try {
+        $graphics.InterpolationMode  = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $graphics.PixelOffsetMode    = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+        $graphics.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+        $graphics.SmoothingMode      = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+
+        $destRect = New-Object System.Drawing.Rectangle(0, 0, $targetW, $targetH)
+        $srcRect  = New-Object System.Drawing.Rectangle($cropX, $cropY, $cropW, $cropH)
+        $graphics.DrawImage($srcImg, $destRect, $srcRect, [System.Drawing.GraphicsUnit]::Pixel)
+
+        $jpegCodec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() |
+                     Where-Object { $_.MimeType -eq 'image/jpeg' }
+        $encParams = New-Object System.Drawing.Imaging.EncoderParameters(1)
+        $encParams.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter(
+            [System.Drawing.Imaging.Encoder]::Quality, [long]98
+        )
+        $bmp.Save($dstPath, $jpegCodec, $encParams)
+    } finally {
+        $graphics.Dispose()
+        $bmp.Dispose()
+    }
+} finally {
+    $srcImg.Dispose()
+}
+
+# 0x0014 = SPI_SETDESKWALLPAPER, 0x03 = SPIF_UPDATEINIFILE | SPIF_SENDWININICHANGE
+[WinPEGraphics]::SystemParametersInfo(0x0014, 0, $dstPath, 0x03) | Out-Null
+'@
+
+Set-Content -Path $wallpaperScriptPath -Value $wallpaperScriptContent -Encoding UTF8 -Force
+
 $osd_version = (Get-InstalledModule -Name OSD).Version.ToString()
 Write-Log "Detected OSDCloud version $osd_version, writing to startup script..." -Color Green
 
@@ -525,6 +748,8 @@ wpeinit
 cd \
 ECHO Apply PowerShell Registry Fixes....
 X:\Windows\System32\reg.exe import "X:\Windows\System32\WindowsPowerShell\v1.0\pwrshsip.reg" /reg:64
+ECHO Configuring Display Resolution and Wallpaper...
+PowerShell -NoProfile -NoLogo -WindowStyle Hidden -ExecutionPolicy Bypass -File "X:\Windows\System32\Set-WinPEWallpaper.ps1"
 ECHO Initialize Hardware
 start /wait PowerShell -Nol -W Mi -C Start-Sleep -Seconds 10
 ECHO Checking Network Connectivity...
@@ -544,6 +769,18 @@ $Startnet | Out-File -FilePath "$MountPath\Windows\System32\Startnet.cmd" -Force
 
 Write-Log "Saving mounted WIM..."
 $MountMyWindowsImage | Dismount-MyWindowsImage -Save
+
+Write-Log "Configuring BCD stores for 1920x1080 / highest native GOP resolution..." -Color Cyan
+$bcdPaths = @(
+    "$WorkspacePath\Media\Boot\BCD",
+    "$WorkspacePath\Media\EFI\Microsoft\Boot\BCD"
+)
+foreach ($bcd in $bcdPaths) {
+    if (Test-Path $bcd) {
+        & bcdedit.exe /store "$bcd" /set '{globalsettings}' highestmode on | Out-Null
+        & bcdedit.exe /store "$bcd" /set '{default}' graphicsresolution 1920x1080 2>$null | Out-Null
+    }
+}
 
 Write-Log "Creating Base ISO..."
 New-OSDCloudISO
