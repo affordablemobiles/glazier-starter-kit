@@ -151,7 +151,7 @@ function Show-GlazierProfileGUI {
         }
 
         $form = New-Object System.Windows.Forms.Form
-        $form.Text = "Glazier Deployment — Select Profile"
+        $form.Text = "Glazier Deployment - Select Profile"
         $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::None
         $form.ClientSize = New-Object System.Drawing.Size(640, 390)
         $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
@@ -252,9 +252,6 @@ function Show-GlazierProfileGUI {
         $btnTerminal.BackColor = [System.Drawing.Color]::FromArgb(240, 242, 245)
         $btnTerminal.ForeColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
         $btnTerminal.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(203, 213, 225)
-        $btnTerminal.Add_Click({
-            Start-Process "PowerShell.exe" -ArgumentList "-NoLogo"
-        })
         $form.Controls.Add($btnTerminal)
 
         # Start Imaging Primary Button
@@ -312,6 +309,11 @@ function Show-GlazierProfileGUI {
         $combo.Add_DropDown($stopCountdown)
         $combo.Add_KeyDown($stopCountdown)
         $btnPause.Add_Click($toggleCountdown)
+        $btnTerminal.Add_Click({
+            & $stopCountdown
+            $form.TopMost = $false
+            Start-Process -FilePath "cmd.exe" -ArgumentList '/c start "Glazier Menu Debug Terminal" PowerShell.exe -NoProfile -NoLogo -NoExit'
+        })
 
         # Set initial selection before starting timer so SelectedIndexChanged sets description
         if ($combo.Items.Count -gt 0) {

@@ -1027,7 +1027,7 @@ $form.Controls.Add($lblDetail)
 
 # Bottom Buttons (Y = 178, Height = 38):
 $btnLogToggle = New-Object System.Windows.Forms.Button
-$btnLogToggle.Text = "Show Debug Log ▾"
+$btnLogToggle.Text = "Show Debug Log [v]"
 $btnLogToggle.Font = New-Object System.Drawing.Font("Segoe UI", 13, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
 $btnLogToggle.Location = New-Object System.Drawing.Point(28, 178)
 $btnLogToggle.Size = New-Object System.Drawing.Size(160, 38)
@@ -1065,16 +1065,18 @@ $btnLogToggle.Add_Click({
     if ($txtLog.Visible) {
         $txtLog.Visible = $false
         $form.ClientSize = New-Object System.Drawing.Size(620, 250)
-        $btnLogToggle.Text = "Show Debug Log ▾"
+        $btnLogToggle.Text = "Show Debug Log [v]"
     } else {
         $form.ClientSize = New-Object System.Drawing.Size(620, 440)
         $txtLog.Visible = $true
-        $btnLogToggle.Text = "Hide Debug Log ▴"
+        $btnLogToggle.Text = "Hide Debug Log [^]"
     }
 })
 
 $btnTerminal.Add_Click({
-    Start-Process "PowerShell.exe" -ArgumentList "-NoLogo"
+    $form.TopMost = $false
+    Add-Log -Message "Opening interactive PowerShell debug terminal..." -Detail "Terminal launched."
+    Start-Process -FilePath "cmd.exe" -ArgumentList '/c start "Glazier WinPE Debug Terminal" PowerShell.exe -NoProfile -NoLogo -NoExit'
 })
 
 function Add-Log {
