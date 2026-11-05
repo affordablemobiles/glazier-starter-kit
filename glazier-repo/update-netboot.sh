@@ -56,8 +56,8 @@ if [ ! -f "${DHCP_LOGO_FILE}" ] && [ -f "${WORK_DIR}/logo.png" ]; then
   DHCP_LOGO_FILE="${WORK_DIR}/logo.png"
 fi
 
-CONSOLE_BLOCK="# No logo_dhcp.png or logo.png found at build time; using USB file fallback only
-console --x 1920 --y 1080 --picture file:/logo_dhcp.png --keep || console --picture file:/logo_dhcp.png --keep || console --x 1920 --y 1080 --picture file:/logo.png --keep || console --picture file:/logo.png --keep ||"
+CONSOLE_BLOCK="# No logo_dhcp.png or logo.png found at build time; set widescreen console resolution if supported
+console --x 1920 --y 1080 || console --x 1366 --y 768 || console --x 1024 --y 768 ||"
 
 if [ -f "${DHCP_LOGO_FILE}" ]; then
   echo "==> Encoding ${DHCP_LOGO_FILE} into URL-escaped 800-char Base64 chunks for autoexec.ipxe..."
@@ -80,7 +80,7 @@ if [ -f "${DHCP_LOGO_FILE}" ]; then
   CONSOLE_BLOCK="# Reassemble inline DHCP splash PNG from ${idx} short chunks (avoids line-length truncation & slash parsing)
 ${CHUNK_LINES}set logo_uri data:;base64,${CONCAT_VARS}
 ${CLEAR_VARS% ; }
-console --x 1920 --y 1080 --picture \${logo_uri} --keep || console --x 1366 --y 768 --picture \${logo_uri} --keep || console --x 1024 --y 768 --picture \${logo_uri} --keep || console --picture \${logo_uri} --keep || console --x 1920 --y 1080 --picture file:/logo_dhcp.png --keep || console --picture file:/logo_dhcp.png --keep || console --x 1920 --y 1080 --picture file:/logo.png --keep || console --picture file:/logo.png --keep ||
+console --x 1920 --y 1080 --picture \${logo_uri} --keep || console --x 1366 --y 768 --picture \${logo_uri} --keep || console --x 1024 --y 768 --picture \${logo_uri} --keep || console --picture \${logo_uri} --keep ||
 clear logo_uri"
 fi
 
@@ -109,6 +109,10 @@ cp -f "${TMP_DIR}/extract/ipxeboot/x86_64-sb/shimx64.efi" "${WORK_DIR}/snponly-s
 cp -f "${TMP_DIR}/extract/ipxeboot/x86_64-sb/shimx64.efi" "${WORK_DIR}/ipxe-shim.efi"
 cp -f "${TMP_DIR}/extract/ipxeboot/x86_64-sb/snponly.efi" "${WORK_DIR}/snponly.efi"
 cp -f "${TMP_DIR}/extract/ipxeboot/x86_64-sb/snponly.efi" "${WORK_DIR}/ipxe.efi"
+
+# Capture build-time UTC timestamp for autoexec.ipxe diagnostic reporting
+BUILD_DATE_UTC="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+BUILD_EPOCH="$(date -u '+%s')"
 
 # 5. Generate resilient autoexec.ipxe (with chunked inline Base64 splash, debug hotkey, DHCP/DNS retries, and cert check)
 echo "==> Generating resilient ${WORK_DIR}/autoexec.ipxe..."
@@ -147,17 +151,18 @@ echo Network configured (\${ip}/\${netmask}, GW: \${gateway}, DNS: \${dns}).
 echo Loading Glazier Boot Menu from \${menu_url}...
 chain --autofree \${menu_url} && exit 0 ||
 set lasterr:uint32 \${builtin/errno:uint32}
+set errhex \${lasterr:hexraw}
 
 # Check for TLS certificate / BIOS clock skew errors
-iseq \${lasterr} 0x0216e48f && goto CERTERROR ||
-iseq \${lasterr} 0x0216ea8f && goto CERTERROR ||
-iseq \${lasterr} 0x0216eb8f && goto CERTERROR ||
-iseq \${lasterr} 0x3c00e183 && goto CERTERROR ||
-iseq \${lasterr} 0x410de13c && goto CERTERROR ||
+iseq \${errhex} 0216e48f && set cert_reason Certificate is NOT YET VALID (BIOS clock is in the PAST - likely a flat CMOS/RTC battery) && goto CERTERROR ||
+iseq \${errhex} 0216ea8f && set cert_reason Certificate has EXPIRED (BIOS clock is set too far in the FUTURE, or server cert expired) && goto CERTERROR ||
+iseq \${errhex} 0216eb8f && set cert_reason Certificate validity period error (BIOS clock is inaccurate) && goto CERTERROR ||
+iseq \${errhex} 3c00e183 && set cert_reason TLS handshake / certificate validation error && goto CERTERROR ||
+iseq \${errhex} 410de13c && set cert_reason TLS certificate chain verification failed && goto CERTERROR ||
 
 inc chainretries
 iseq \${chainretries} 10 && goto FAIL_CHAIN ||
-echo Download failed with error \${lasterr:hexraw} (Attempt \${chainretries}/10).
+echo Download failed with error \${errhex} (Attempt \${chainretries}/10).
 isset \${dns:ipv4} && set dns \${dns:ipv4} || set dns 8.8.8.8
 echo Retrying in 5 seconds (DNS: \${dns})...
 sleep 5 ||
@@ -166,12 +171,17 @@ goto CHAIN_TRY
 :CERTERROR
 # Reset console to standard full-screen text mode so debug output is completely unobstructed
 console ||
+echo ================================================================================
+echo [ERROR] TLS Certificate Validation Failed! (https://ipxe.org/\${errhex})
+echo ================================================================================
+echo Diagnosis   : \${cert_reason}
+echo Action      : Boot into BIOS/UEFI Setup (F2 / F10 / Del) and set the Date & Time.
 echo
-echo [ERROR] TLS Certificate validation failed! (https://ipxe.org/\${lasterr:hexraw})
-echo Most likely cause: The BIOS/CMOS clock on this device is inaccurate.
-echo Current device unixtime: \${unixtime:int32}
+echo Device Unixtime: \${unixtime:int32}
+echo Image Built    : ${BUILD_DATE_UTC} (epoch: ${BUILD_EPOCH})
+echo ================================================================================
 certstat ||
-goto FAIL_PROMPT
+goto FAIL_INFO
 
 :FAIL_DHCP
 console ||
