@@ -1,0 +1,13 @@
+services:
+  gcs-tftp-server:
+    image: ghcr.io/affordablemobiles/glazier-starter-kit/gcs-tftp-server:latest
+    container_name: gcs-tftp-server
+    restart: unless-stopped
+    ports:
+      - "69:69/udp"
+    environment:
+      GCS_BUCKET: "${GCS_BUCKET:?Please set GCS_BUCKET in your environment or .env file}"
+      GCS_PREFIX: "${GCS_PREFIX:-}"
+      TFTP_LISTEN: ":69"
+      TFTP_SINGLE_PORT: "true"
+      CACHE_TTL: "${CACHE_TTL:-5m}"

@@ -1,0 +1,10 @@
+# Required: Name of your public Google Cloud Storage bucket containing iPXE boot files
+GCS_BUCKET=your-gcs-bucket-name
+
+# Optional: Subdirectory prefix inside the bucket (leave empty for bucket root)
+GCS_PREFIX=
+
+# Optional: UDP listen address and cache TTL
+TFTP_LISTEN=:69
+TFTP_SINGLE_PORT=true
+CACHE_TTL=5m
