@@ -24,4 +24,4 @@ steps:
           '--serviceAccount', '$_SERVICEACCOUNT',
           '--tags', '$_TAGS',
           '--command', 'powershell.exe -File tools/bootstrap_winpe.ps1 -config_server "$_CONFIG_SERVER" -storage_upload_path "$_STORAGE_UPLOAD_PATH" -storage_boot_upload_path "$_STORAGE_BOOT_UPLOAD_PATH" -use_winre "$_USE_WINRE" -refresh_winre "$_REFRESH_WINRE"' ]
-timeout: 5400s
+timeout: 9000s
