@@ -1,24 +1,47 @@
 Param(
-    [string]$config_server="http://glazier"
+    [string] = "http://glazier"
 )
 
-if ($config_server -eq "") {
-  $config_server = "http://glazier"
+if ( -eq "") {
+   = "http://glazier"
+}
+ = .TrimEnd('/')
+ = "win10-stable-enterprise"
+
+ = Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\MiniNT'
+ = if () { "X:" } else { "C:" }
+
+.UI.RawUI.WindowTitle = 'Glazier'
+:LOCALAPPDATA = ""
+:PYTHONPATH = "\glazier"
+:SSL_CERT_FILE = "\glazier-resources\ca-certs.crt"
+Write-Output "Starting Glazier imaging process ()..."
+
+ = @(
+    "\glazier-resources\GlazierDeploymentGUI.ps1",
+    "X:\glazier-resources\GlazierDeploymentGUI.ps1",
+    "C:\glazier-resources\GlazierDeploymentGUI.ps1",
+    ":SystemRoot\System32\GlazierDeploymentGUI.ps1",
+    "\GlazierDeploymentGUI.ps1"
+)
+ = 
+foreach ( in ) {
+    if (Test-Path ) {
+         = 
+        break
+    }
 }
 
-$Host.UI.RawUI.WindowTitle = 'Glazier'
-$env:LOCALAPPDATA = 'X:\'
-$env:PYTHONPATH = 'X:\glazier\'
-$env:SSL_CERT_FILE = 'X:\glazier-resources\ca-certs.crt'
-Write-Output 'Starting Glazier imaging process...'
-
-# For a full list of Glazier flags, execute `python autobuild.py --helpfull`
-$py_args = @(
-  "X:\glazier\glazier\autobuild.py",
-  "--config_server=$config_server",
-  '--resource_path=X:\glazier-resources',
-  '--glazier_spec_os=win10-stable-enterprise',
-  '--preserve_tasks=true'
-)
-
-& X:\Python\python.exe $py_args
+if () {
+    . 
+    Start-GlazierDeploymentGUI -ConfigServer  -GlazierSpecOS 
+} else {
+     = @(
+        "\glazier\glazierutobuild.py",
+        "--config_server=",
+        "--resource_path=\glazier-resources",
+        "--glazier_spec_os=",
+        '--preserve_tasks=true'
+    )
+    & "\Python\python.exe" 
+}

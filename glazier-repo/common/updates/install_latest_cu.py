@@ -25,6 +25,13 @@ for glazier_path in (r'X:\glazier', r'C:\glazier'):
   if os.path.isdir(glazier_path) and glazier_path not in sys.path:
     sys.path.insert(0, glazier_path)
 
+try:
+  from absl import flags  # pylint: disable=g-import-not-at-top
+  if not flags.FLAGS.is_parsed():
+    flags.FLAGS(sys.argv[:1], known_only=True)
+except Exception:  # pylint: disable=broad-except
+  pass
+
 from glazier.lib import buildinfo
 from glazier.lib import logs
 from glazier.lib.actions import updates

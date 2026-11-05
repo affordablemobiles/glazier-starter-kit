@@ -861,6 +861,12 @@ foreach ($res in $candidateResolutions) {
 
 # 2. Crop and scale wallpaper retaining bottom-left (X = 0, Y = Bottom)
 $srcPath = "$env:SystemRoot\System32\winpe.jpg"
+if (-not (Test-Path $srcPath)) {
+    $srcPath = "C:\glazier-resources\winpe.jpg"
+}
+if (-not (Test-Path $srcPath)) {
+    $srcPath = "X:\glazier-resources\winpe.jpg"
+}
 $dstPath = "$env:TEMP\winpe_cropped.jpg"
 if (-not (Test-Path $srcPath)) { exit 0 }
 
@@ -928,6 +934,17 @@ try {
 '@
 
 Set-Content -Path $wallpaperScriptPath -Value $wallpaperScriptContent -Encoding UTF8 -Force
+
+if (Test-Path $wallpaperPath) {
+    Copy-Item -Path $wallpaperPath -Destination "$MountPath\glazier-resources\winpe.jpg" -Force
+} elseif (Test-Path "$MountPath\Windows\System32\winpe.jpg") {
+    Copy-Item -Path "$MountPath\Windows\System32\winpe.jpg" -Destination "$MountPath\glazier-resources\winpe.jpg" -Force
+}
+Copy-Item -Path $wallpaperScriptPath -Destination "$MountPath\glazier-resources\Set-WinPEWallpaper.ps1" -Force
+if (Test-Path "$scriptPath\..\glazier-resources\GlazierDeploymentGUI.ps1") {
+    Copy-Item -Path "$scriptPath\..\glazier-resources\GlazierDeploymentGUI.ps1" -Destination "$MountPath\glazier-resources\GlazierDeploymentGUI.ps1" -Force
+    Copy-Item -Path "$scriptPath\..\glazier-resources\GlazierDeploymentGUI.ps1" -Destination "$MountPath\Windows\System32\GlazierDeploymentGUI.ps1" -Force
+}
 
 Write-Log "Writing Initialize-GlazierWinPE.ps1 (Boot Progress GUI) to System32..." -Color Cyan
 $initScriptPath = "$MountPath\Windows\System32\Initialize-GlazierWinPE.ps1"

@@ -1,18 +1,40 @@
-$config_server = "https://storage.googleapis.com/a1comms-glazier-config"
+ = "https://storage.googleapis.com/a1comms-glazier-config"
+ = "windows-stable-gcpw"
 
-$Host.UI.RawUI.WindowTitle = 'Glazier'
-$env:LOCALAPPDATA = 'C:\'
-$env:PYTHONPATH = 'C:\glazier\'
-$env:SSL_CERT_FILE = 'C:\glazier-resources\ca-certs.crt'
-Write-Output 'Starting Glazier imaging process...'
+ = Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\MiniNT'
+ = if () { "X:" } else { "C:" }
 
-# For a full list of Glazier flags, execute `python autobuild.py --helpfull`
-$py_args = @(
-  "C:\glazier\glazier\autobuild.py",
-  "--config_server=$config_server",
-  '--resource_path=C:\glazier-resources',
-  '--glazier_spec_os=windows-stable-gcpw',
-  '--preserve_tasks=true'
+.UI.RawUI.WindowTitle = 'Glazier'
+:LOCALAPPDATA = ""
+:PYTHONPATH = "\glazier"
+:SSL_CERT_FILE = "\glazier-resources\ca-certs.crt"
+Write-Output "Starting Glazier imaging process ()..."
+
+ = @(
+    "\glazier-resources\GlazierDeploymentGUI.ps1",
+    "C:\glazier-resources\GlazierDeploymentGUI.ps1",
+    "X:\glazier-resources\GlazierDeploymentGUI.ps1",
+    ":SystemRoot\System32\GlazierDeploymentGUI.ps1",
+    "\GlazierDeploymentGUI.ps1"
 )
+ = 
+foreach ( in ) {
+    if (Test-Path ) {
+         = 
+        break
+    }
+}
 
-& C:\Python\python.exe $py_args
+if () {
+    . 
+    Start-GlazierDeploymentGUI -ConfigServer  -GlazierSpecOS 
+} else {
+     = @(
+        "\glazier\glazierutobuild.py",
+        "--config_server=",
+        "--resource_path=\glazier-resources",
+        "--glazier_spec_os=",
+        '--preserve_tasks=true'
+    )
+    & "\Python\python.exe" 
+}
