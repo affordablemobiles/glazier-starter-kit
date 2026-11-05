@@ -441,7 +441,13 @@ robocopy "$scriptPath\" "$MountPath\Windows\System32\WindowsPowerShell\v1.0\" pw
 Write-Log "Downloading CA certificates bundle to WIM..."
 & curl.exe -fsSL -o "$MountPath\glazier-resources\ca-certs.crt" "https://curl.se/ca/cacert.pem"
 
-Write-Log "Bundling pre-installed OSD and MSCatalog modules into WIM..."
+Write-Log "Bundling pre-installed NuGet provider, PackageManagement, PowerShellGet, OSD, and MSCatalog into WIM..."
+# 1. Pre-stage the NuGet provider DLL so WinPE never prompts to bootstrap NuGet at runtime
+robocopy "C:\Program Files\PackageManagement\ProviderAssemblies\" "$MountPath\Program Files\PackageManagement\ProviderAssemblies\" /E /PURGE /ndl /njh /njs /np | Out-Null
+
+# 2. Pre-stage updated PackageManagement & PowerShellGet alongside OSD and MSCatalog
+robocopy "C:\Program Files\WindowsPowerShell\Modules\PackageManagement\" "$MountPath\Program Files\WindowsPowerShell\Modules\PackageManagement\" /E /PURGE /ndl /njh /njs /np | Out-Null
+robocopy "C:\Program Files\WindowsPowerShell\Modules\PowerShellGet\" "$MountPath\Program Files\WindowsPowerShell\Modules\PowerShellGet\" /E /PURGE /ndl /njh /njs /np | Out-Null
 robocopy "C:\Program Files\WindowsPowerShell\Modules\OSD\" "$MountPath\Program Files\WindowsPowerShell\Modules\OSD\" /E /PURGE /ndl /njh /njs /np | Out-Null
 robocopy "C:\Program Files\WindowsPowerShell\Modules\MSCatalog\" "$MountPath\Program Files\WindowsPowerShell\Modules\MSCatalog\" /E /PURGE /ndl /njh /njs /np | Out-Null
 
@@ -474,10 +480,8 @@ ECHO Initialize Hardware
 start /wait PowerShell -Nol -W Mi -C Start-Sleep -Seconds 10
 ECHO Checking Network Connectivity...
 start /wait PowerShell -NoL -C "& {{ if (Get-Service WlanSvc -ErrorAction SilentlyContinue) {{ if ((Get-Service WlanSvc).Status -ne 'Running') {{ Start-Service WlanSvc -ErrorAction SilentlyContinue }} }}; Start-Sleep -Seconds 5; `$activeIP = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {{ `$_.InterfaceAlias -notmatch 'Loopback' -and `$_.IPAddress -notlike '169.254.*' }}; if (-not `$activeIP) {{ Write-Host '[!] No active network connection detected. Prompting for Wi-Fi...' -ForegroundColor Yellow; if (Test-Path 'X:\Windows\WirelessConnect.exe') {{ Start-Process -FilePath 'X:\Windows\WirelessConnect.exe' -Wait }} elseif (Test-Path 'X:\Windows\System32\WirelessConnect.exe') {{ Start-Process -FilePath 'X:\Windows\System32\WirelessConnect.exe' -Wait }}; Start-Sleep -Seconds 5 }} else {{ Write-Host '[+] Network connection detected.' -ForegroundColor Green }} }}"
-ECHO Checking OSD PowerShell Module Updates (Minimized)
-start /wait PowerShell -NoL -W Mi -C "& {{Import-Module OSD -ErrorAction SilentlyContinue; if (Test-WebConnection) {{[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Install-Module OSD -Force -AllowClobber -SkipPublisherCheck -Verbose}}}}"
-ECHO Checking MSCatalog PowerShell Module Updates (Minimized)
-start /wait PowerShell -NoL -W Mi -C "& {{Import-Module OSD -ErrorAction SilentlyContinue; if (Test-WebConnection) {{[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Install-Module MSCatalog -Force -AllowClobber -SkipPublisherCheck -Verbose}}}}"
+ECHO Checking OSD & MSCatalog PowerShell Module Updates (Minimized)
+start /wait PowerShell -NoL -W Mi -C "& {{ `$ConfirmPreference = 'None'; `$ProgressPreference = 'SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Import-Module OSD -ErrorAction SilentlyContinue; if (Test-WebConnection) {{ if (-not (Get-PackageProvider -ListAvailable -Name NuGet -ErrorAction SilentlyContinue)) {{ Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope AllUsers | Out-Null }}; Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue; Install-Module OSD -Force -AllowClobber -SkipPublisherCheck -Confirm:`$false -ErrorAction SilentlyContinue; Install-Module MSCatalog -Force -AllowClobber -SkipPublisherCheck -Confirm:`$false -ErrorAction SilentlyContinue }} }}"
 ECHO Initialize PowerShell (Minimized)
 start PowerShell -Nol -W Mi
 @ECHO ON
