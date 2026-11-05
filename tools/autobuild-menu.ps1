@@ -112,6 +112,31 @@ public class Win32WindowHelper {
 
     [DllImport("gdi32.dll", CharSet = CharSet.Auto)]
     public static extern int AddFontResource(string lpFileName);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr GetStdHandle(int nStdHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+
+    public const int STD_INPUT_HANDLE = -10;
+    public const uint ENABLE_QUICK_EDIT_MODE = 0x0040;
+    public const uint ENABLE_EXTENDED_FLAGS = 0x0080;
+
+    public static void DisableQuickEdit() {
+        try {
+            IntPtr hStdin = GetStdHandle(STD_INPUT_HANDLE);
+            uint mode;
+            if (GetConsoleMode(hStdin, out mode)) {
+                mode &= ~ENABLE_QUICK_EDIT_MODE;
+                mode |= ENABLE_EXTENDED_FLAGS;
+                SetConsoleMode(hStdin, mode);
+            }
+        } catch {}
+    }
 }
 "@ -ErrorAction SilentlyContinue
 
@@ -359,6 +384,10 @@ function Show-GlazierProfileGUI {
                 if ($consoleHwnd -ne [IntPtr]::Zero) {
                     [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 3) # SW_MAXIMIZE
                 }
+                [Win32WindowHelper]::DisableQuickEdit()
+                $rawUI = $Host.UI.RawUI
+                $rawUI.CursorPosition = New-Object System.Management.Automation.Host.Coordinates(0, $rawUI.CursorPosition.Y)
+                $rawUI.WindowPosition = New-Object System.Management.Automation.Host.Coordinates(0, [Math]::Max(0, $rawUI.CursorPosition.Y - $rawUI.WindowSize.Height + 1))
             } catch {
                 # ignore restore error
             }
@@ -382,13 +411,19 @@ if ([string]::IsNullOrWhiteSpace($glazier_spec_os)) {
         }
     } catch {}
     $menuData = Get-GlazierProfiles -BaseUrl $config_server
-    $glazier_spec_os = @(Show-GlazierProfileGUI -MenuData $menuData) | Where-Object { $_ -is [string] -and $_.Trim() -ne "" } | Select-Object -Last 1
-    if ($glazier_spec_os) {
-        $glazier_spec_os = $glazier_spec_os.Trim()
-    }
+    $rawSelection = @(Show-GlazierProfileGUI -MenuData $menuData)
+    $glazier_spec_os = ($rawSelection | Where-Object { $_ -is [string] -and -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Last 1).Trim()
 }
 
 Write-Output "Starting Glazier imaging process with profile: $glazier_spec_os..."
+
+# Ensure console auto-scrolls properly to bottom and QuickEdit is disabled
+try {
+    [Win32WindowHelper]::DisableQuickEdit()
+    $rawUI = $Host.UI.RawUI
+    $rawUI.CursorPosition = New-Object System.Management.Automation.Host.Coordinates(0, $rawUI.CursorPosition.Y)
+    $rawUI.WindowPosition = New-Object System.Management.Automation.Host.Coordinates(0, [Math]::Max(0, $rawUI.CursorPosition.Y - $rawUI.WindowSize.Height + 1))
+} catch {}
 
 # For a full list of Glazier flags, execute `python autobuild.py --helpfull`
 $py_args = @(

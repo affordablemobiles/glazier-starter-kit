@@ -839,7 +839,9 @@ public class WinPEGraphics {
 }
 "@
 
-Add-Type -TypeDefinition $win32Source -ErrorAction SilentlyContinue
+if (-not ('WinPEGraphics' -as [type])) {
+    Add-Type -TypeDefinition $win32Source -ErrorAction SilentlyContinue
+}
 
 # 1. Cascading resolution fallback matching iPXE menu:
 #    1920x1080 -> 1366x768 (or 1360x768) -> 1024x768 -> keep current
@@ -921,8 +923,8 @@ try {
     $srcImg.Dispose()
 }
 
-# 0x0014 = SPI_SETDESKWALLPAPER, 0x03 = SPIF_UPDATEINIFILE | SPIF_SENDWININICHANGE
-[WinPEGraphics]::SystemParametersInfo(0x0014, 0, $dstPath, 0x03) | Out-Null
+# 0x0014 = SPI_SETDESKWALLPAPER, 0x01 = SPIF_UPDATEINIFILE
+[void][WinPEGraphics]::SystemParametersInfo(0x0014, 0, $dstPath, 0x01)
 '@
 
 Set-Content -Path $wallpaperScriptPath -Value $wallpaperScriptContent -Encoding UTF8 -Force
@@ -949,7 +951,15 @@ public class Win32Window {
     public static extern int AddFontResource(string lpFileName);
 }
 "@
-Add-Type -TypeDefinition $win32TypeDef -ErrorAction SilentlyContinue
+if (-not ('Win32Window' -as [type])) {
+    Add-Type -TypeDefinition $win32TypeDef -ErrorAction SilentlyContinue
+}
+
+# Minimize (DO NOT Hide) Parent Console immediately so Startnet.cmd disappears to the taskbar within ~1 second
+$consoleHwnd = [Win32Window]::GetConsoleWindow()
+if ($consoleHwnd -ne [IntPtr]::Zero) {
+    [void][Win32Window]::ShowWindow($consoleHwnd, 6) # SW_MINIMIZE
+}
 
 # Ensure core fonts are loaded into the live GDI session
 $fontsDir = "$env:SystemRoot\Fonts"
@@ -961,8 +971,7 @@ foreach ($ff in $fontFiles) {
     }
 }
 
-# Step 1: Display & Wallpaper
-# Call Set-WinPEWallpaper.ps1 FIRST so screen resolution is configured before the form centers itself on screen
+# Display & Wallpaper: Call Set-WinPEWallpaper.ps1 FIRST so screen resolution is configured before the form centers itself on screen
 $wallpaperScript = "$env:SystemRoot\System32\Set-WinPEWallpaper.ps1"
 if (-not (Test-Path $wallpaperScript)) {
     $wallpaperScript = "X:\Windows\System32\Set-WinPEWallpaper.ps1"
@@ -973,12 +982,6 @@ if (Test-Path $wallpaperScript) {
     } catch {
         # continue even if wallpaper script fails
     }
-}
-
-# Minimize (DO NOT Hide) Parent Console so Startnet.cmd is minimised cleanly to the bottom-left
-$consoleHwnd = [Win32Window]::GetConsoleWindow()
-if ($consoleHwnd -ne [IntPtr]::Zero) {
-    [void][Win32Window]::ShowWindow($consoleHwnd, 6) # SW_MINIMIZE
 }
 
 function Test-WinPENetwork {
@@ -1137,6 +1140,19 @@ try {
     $form.Show()
     [System.Windows.Forms.Application]::DoEvents()
     Add-Log -Message "Glazier WinPE initialization started." -Detail "Display configured."
+
+    # Step 1 of 4: Initializing WinPE hardware and drivers (wpeinit)
+    Set-Step -Status "Step 1 of 4: Initializing WinPE hardware and drivers (wpeinit)..." -Detail "Running wpeinit.exe..."
+    $wpeProc = Start-Process -FilePath "$env:SystemRoot\System32\wpeinit.exe" -NoNewWindow -PassThru
+    while (-not $wpeProc.HasExited) {
+        [System.Windows.Forms.Application]::DoEvents()
+        Start-Sleep -Milliseconds 100
+    }
+    Add-Log -Message "wpeinit.exe completed." -Detail "Hardware and network drivers initialized."
+    # Re-run Set-WinPEWallpaper.ps1 quickly in case wpeinit loaded a new GOP/display driver
+    if (Test-Path $wallpaperScript) {
+        try { & $wallpaperScript } catch {}
+    }
 
     # Step 2: Zero-Dependency Network Detection & Polling
     Set-Step -Status "Step 2 of 4: Checking network connectivity..." -Detail "Checking network interfaces..."
@@ -1297,15 +1313,10 @@ Write-Log "Detected OSDCloud version $osd_version, writing to startup script..."
 # Write out Startnet.cmd, which will run when WinPE boots. This will detect network / Wi-Fi and then autobuild.ps1.
 $Startnet = @"
 @ECHO OFF
+TITLE Glazier WinPE Initialization
 ECHO Glazier WinPE with OSDCloud {0}
-ECHO Initialize WinPE
-wpeinit
-cd \
-ECHO Apply PowerShell Registry Fixes....
-X:\Windows\System32\reg.exe import "X:\Windows\System32\WindowsPowerShell\v1.0\pwrshsip.reg" /reg:64
-ECHO Initializing Glazier WinPE Environment...
+X:\Windows\System32\reg.exe import "X:\Windows\System32\WindowsPowerShell\v1.0\pwrshsip.reg" /reg:64 >nul 2>&1
 PowerShell -NoProfile -NoLogo -ExecutionPolicy Bypass -File "X:\Windows\System32\Initialize-GlazierWinPE.ps1"
-ECHO Start PowerShell
 start PowerShell -NoProfile -NoLogo -WindowStyle Maximized -NoExit -File "X:\Windows\System32\autobuild.ps1" -config_server {1}
 "@ -f $osd_version, $config_server
 
