@@ -50,38 +50,67 @@ for cmd in curl tar base64 mcopy; do
   fi
 done
 
-# 2. Check for logo.png and encode it to Base64 for inline embedding into autoexec.ipxe
-LOGO_FILE="${WORK_DIR}/logo.png"
-LOGO_B64=""
-if [ -f "${LOGO_FILE}" ]; then
-  echo "==> Encoding ${LOGO_FILE} to Base64 for inline embedding into autoexec.ipxe..."
-  LOGO_B64="$(base64 -w 0 "${LOGO_FILE}" 2>/dev/null || base64 "${LOGO_FILE}" | tr -d '\r\n')"
-else
-  echo "==> Note: ${LOGO_FILE} not found; generating text-only autoexec.ipxe."
+# 2. Check for splash screen images and encode DHCP splash into 800-char Base64 chunks for autoexec.ipxe
+DHCP_LOGO_FILE="${WORK_DIR}/logo_dhcp.png"
+if [ ! -f "${DHCP_LOGO_FILE}" ] && [ -f "${WORK_DIR}/logo.png" ]; then
+  DHCP_LOGO_FILE="${WORK_DIR}/logo.png"
+fi
+
+CONSOLE_BLOCK="# No logo_dhcp.png or logo.png found at build time; using USB file fallback only
+console --x 1920 --y 1080 --picture file:/logo_dhcp.png --keep || console --picture file:/logo_dhcp.png --keep || console --x 1920 --y 1080 --picture file:/logo.png --keep || console --picture file:/logo.png --keep ||"
+
+if [ -f "${DHCP_LOGO_FILE}" ]; then
+  echo "==> Encoding ${DHCP_LOGO_FILE} into URL-escaped 800-char Base64 chunks for autoexec.ipxe..."
+  # Encode PNG to Base64 and URL-escape '/' (%2F) and '+' (%2B) so iPXE parse_uri() never sees a '/'
+  # (parse_uri() automatically runs uri_decode_inplace() on uri->opaque before base64_decode()!)
+  RAW_B64="$( (base64 -w 0 "${DHCP_LOGO_FILE}" 2>/dev/null || base64 "${DHCP_LOGO_FILE}") | tr -d '\r\n\t ' | sed 's|/|%2F|g; s|+|%2B|g' )"
+  CHUNK_LINES=""
+  CONCAT_VARS=""
+  CLEAR_VARS=""
+  idx=0
+  while [ -n "${RAW_B64}" ]; do
+    chunk="${RAW_B64:0:800}"
+    RAW_B64="${RAW_B64:800}"
+    CHUNK_LINES+="set b${idx} ${chunk}"$'\n'
+    CONCAT_VARS+="\${b${idx}}"
+    CLEAR_VARS+="clear b${idx} ; "
+    idx=$((idx + 1))
+  done
+
+  CONSOLE_BLOCK="# Reassemble inline DHCP splash PNG from ${idx} short chunks (avoids line-length truncation & slash parsing)
+${CHUNK_LINES}set logo_uri data:;base64,${CONCAT_VARS}
+${CLEAR_VARS% ; }
+console --x 1920 --y 1080 --picture \${logo_uri} --keep || console --x 1366 --y 768 --picture \${logo_uri} --keep || console --x 1024 --y 768 --picture \${logo_uri} --keep || console --picture \${logo_uri} --keep || console --x 1920 --y 1080 --picture file:/logo_dhcp.png --keep || console --picture file:/logo_dhcp.png --keep || console --x 1920 --y 1080 --picture file:/logo.png --keep || console --picture file:/logo.png --keep ||
+clear logo_uri"
 fi
 
 # 3. Download latest upstream iPXE and wimboot releases
 echo "==> Downloading latest upstream iPXE & wimboot releases from GitHub..."
-curl -fsSL "https://github.com/ipxe/ipxe/releases/latest/download/ipxeboot.tar.gz"   -o "${TMP_DIR}/ipxeboot.tar.gz"
+curl -fsSL "https://github.com/ipxe/ipxe/releases/latest/download/ipxeboot.tar.gz" \
+  -o "${TMP_DIR}/ipxeboot.tar.gz"
 
-curl -fsSL "https://github.com/ipxe/ipxe/releases/latest/download/ipxe-x86_64-sb.usb"   -o "${WORK_DIR}/usb/glazier-ipxe-x86_64-sb.usb"
+curl -fsSL "https://github.com/ipxe/ipxe/releases/latest/download/ipxe-x86_64-sb.usb" \
+  -o "${WORK_DIR}/usb/glazier-ipxe-x86_64-sb.usb"
 
-curl -fsSL "https://github.com/ipxe/wimboot/releases/latest/download/wimboot"   -o "${WORK_DIR}/wimboot"
+curl -fsSL "https://github.com/ipxe/wimboot/releases/latest/download/wimboot" \
+  -o "${WORK_DIR}/wimboot"
 
 # Keep wimboot.x86_64.efi copy for backwards compatibility with older Glazier scripts
 cp -f "${WORK_DIR}/wimboot" "${WORK_DIR}/wimboot.x86_64.efi"
 
-# 4. Extract x86_64-sb Secure Boot binaries (--dereference converts symlinks into real files for GCS/TFTP)
-echo "==> Extracting x86_64-sb Secure Boot binaries..."
+# 4. Extract x86_64-sb Secure Boot binaries
+#    IMPORTANT: Copy snponly.efi to BOTH snponly.efi AND ipxe.efi so that UEFI firmwares
+#    hitting iPXE Issue #1684 (where shimx64.efi falls back to /ipxe.efi) still boot snponly.efi!
+echo "==> Extracting x86_64-sb Secure Boot binaries (enforcing snponly.efi)..."
 tar -xzf "${TMP_DIR}/ipxeboot.tar.gz" --dereference -C "${TMP_DIR}/extract"
 
 cp -f "${TMP_DIR}/extract/ipxeboot/x86_64-sb/shimx64.efi" "${WORK_DIR}/shimx64.efi"
 cp -f "${TMP_DIR}/extract/ipxeboot/x86_64-sb/shimx64.efi" "${WORK_DIR}/snponly-shim.efi"
 cp -f "${TMP_DIR}/extract/ipxeboot/x86_64-sb/shimx64.efi" "${WORK_DIR}/ipxe-shim.efi"
 cp -f "${TMP_DIR}/extract/ipxeboot/x86_64-sb/snponly.efi" "${WORK_DIR}/snponly.efi"
-cp -f "${TMP_DIR}/extract/ipxeboot/x86_64-sb/ipxe.efi"    "${WORK_DIR}/ipxe.efi"
+cp -f "${TMP_DIR}/extract/ipxeboot/x86_64-sb/snponly.efi" "${WORK_DIR}/ipxe.efi"
 
-# 5. Generate resilient autoexec.ipxe (with optional inline Base64 splash, debug hotkey, DHCP/DNS retries, and cert check)
+# 5. Generate resilient autoexec.ipxe (with chunked inline Base64 splash, debug hotkey, DHCP/DNS retries, and cert check)
 echo "==> Generating resilient ${WORK_DIR}/autoexec.ipxe..."
 cat << EOF > "${WORK_DIR}/autoexec.ipxe"
 #!ipxe
@@ -89,35 +118,17 @@ cat << EOF > "${WORK_DIR}/autoexec.ipxe"
 # Optional 500ms 'p' hotkey to drop directly into iPXE shell for debugging
 prompt --key p --timeout 500 && shell ||
 
-EOF
-
-if [ -n "${LOGO_B64}" ]; then
-  cat << EOF >> "${WORK_DIR}/autoexec.ipxe"
-# Set 1024x768 graphical framebuffer with inline splash screen BEFORE DHCP
-console --x 1024 --y 768 --picture data:image/png;base64,${LOGO_B64} && goto CONSOLEOK || goto CONSOLEDONE
-:CONSOLEOK
-colour --rgb 0xffffff 7 ||
-cpair --foreground 7 0 ||
-:CONSOLEDONE
-
-EOF
-else
-  cat << EOF >> "${WORK_DIR}/autoexec.ipxe"
-colour --rgb 0xffffff 7 ||
-cpair --foreground 7 0 ||
-
-EOF
-fi
-
-cat << EOF >> "${WORK_DIR}/autoexec.ipxe"
+# Clear initial UEFI text console before activating graphical framebuffer
 set esc:hex 1b && set esc \${esc:string} ||
 set cls \${esc}[2J
+echo -n \${cls}
+
+${CONSOLE_BLOCK}
 
 set dhcpretries:int32 0
 set chainretries:int32 0
 
 :DHCP_TRY
-echo -n \${cls}
 echo Initialising network interface and requesting DHCP lease...
 ifconf && goto DHCP_OK ||
 inc dhcpretries
@@ -132,7 +143,6 @@ goto DHCP_TRY
 set menu_url ${BUCKET_URL}/boot.ipxe
 
 :CHAIN_TRY
-echo -n \${cls}
 echo Network configured (\${ip}/\${netmask}, GW: \${gateway}, DNS: \${dns}).
 echo Loading Glazier Boot Menu from \${menu_url}...
 chain --autofree \${menu_url} && exit 0 ||
@@ -148,13 +158,14 @@ iseq \${lasterr} 0x410de13c && goto CERTERROR ||
 inc chainretries
 iseq \${chainretries} 10 && goto FAIL_CHAIN ||
 echo Download failed with error \${lasterr:hexraw} (Attempt \${chainretries}/10).
-# Normalize DNS to first IPv4 DNS entry in case multiple DHCP DNS servers confused iPXE
 isset \${dns:ipv4} && set dns \${dns:ipv4} || set dns 8.8.8.8
 echo Retrying in 5 seconds (DNS: \${dns})...
 sleep 5 ||
 goto CHAIN_TRY
 
 :CERTERROR
+# Reset console to standard full-screen text mode so debug output is completely unobstructed
+console ||
 echo
 echo [ERROR] TLS Certificate validation failed! (https://ipxe.org/\${lasterr:hexraw})
 echo Most likely cause: The BIOS/CMOS clock on this device is inaccurate.
@@ -163,11 +174,13 @@ certstat ||
 goto FAIL_PROMPT
 
 :FAIL_DHCP
+console ||
 set lasterr:uint32 \${builtin/errno:uint32}
 echo [ERROR] Failed to obtain a DHCP lease after \${dhcpretries} attempts.
 goto FAIL_INFO
 
 :FAIL_CHAIN
+console ||
 echo [ERROR] Failed to load \${menu_url} after \${chainretries} attempts.
 
 :FAIL_INFO
@@ -185,17 +198,23 @@ prompt --key 0x000a --timeout 30000 Press Enter for iPXE shell, or any other key
 reboot
 EOF
 
-# 6. Inject autoexec.ipxe (and logo.png if present) into the USB image (FAT filesystem at offset 0)
-echo "==> Injecting autoexec.ipxe into USB image..."
+# 6. Inject autoexec.ipxe, splash logos (if present), AND snponly.efi (as EFI/BOOT/IPXE.EFI) into the USB image
+echo "==> Injecting autoexec.ipxe, splash logos (if present), and snponly.efi into USB image..."
 USB_IMG="${WORK_DIR}/usb/glazier-ipxe-x86_64-sb.usb"
-mcopy -i "${USB_IMG}" -o "${WORK_DIR}/autoexec.ipxe" ::/autoexec.ipxe
-if [ -f "${LOGO_FILE}" ]; then
-  echo "==> Injecting logo.png into USB image..."
-  mcopy -i "${USB_IMG}" -o "${LOGO_FILE}" ::/logo.png
+# Support both GPT offset 1MiB (@@1M) and raw FAT offset 0
+MTOOLS_TARGET="${USB_IMG}@@1M"
+if ! mdir -i "${MTOOLS_TARGET}" ::/ >/dev/null 2>&1; then
+  MTOOLS_TARGET="${USB_IMG}"
 fi
 
-echo "==> USB filesystem contents:"
-mdir -i "${USB_IMG}" ::/
+mcopy -i "${MTOOLS_TARGET}" -o "${WORK_DIR}/autoexec.ipxe" ::/autoexec.ipxe
+mcopy -i "${MTOOLS_TARGET}" -o "${WORK_DIR}/snponly.efi"   ::/EFI/BOOT/IPXE.EFI
+[ -f "${WORK_DIR}/logo_dhcp.png" ] && mcopy -i "${MTOOLS_TARGET}" -o "${WORK_DIR}/logo_dhcp.png" ::/logo_dhcp.png || true
+[ -f "${WORK_DIR}/logo.png" ]      && mcopy -i "${MTOOLS_TARGET}" -o "${WORK_DIR}/logo.png"      ::/logo.png      || true
+
+echo "==> USB EFI System Partition contents:"
+mdir -i "${MTOOLS_TARGET}" ::/
+mdir -i "${MTOOLS_TARGET}" ::/EFI/BOOT/
 
 # 7. Create a generic default boot.ipxe main menu if one does not already exist
 if [ ! -f "${WORK_DIR}/boot.ipxe" ]; then
@@ -203,8 +222,8 @@ if [ ! -f "${WORK_DIR}/boot.ipxe" ]; then
   cat << EOF > "${WORK_DIR}/boot.ipxe"
 #!ipxe
 
-# Re-apply background with --keep so it persists across menu redraws (if available)
-console --x 1024 --y 768 --picture ${BUCKET_URL}/logo.png --keep ||
+# Re-apply 1920x1080 widescreen background with --keep so it persists across menu redraws
+console --x 1920 --y 1080 --picture ${BUCKET_URL}/logo.png --keep || console --x 1366 --y 768 --picture ${BUCKET_URL}/logo.png --keep || console --x 1024 --y 768 --picture ${BUCKET_URL}/logo.png --keep || console --picture ${BUCKET_URL}/logo.png --keep ||
 
 # Some menu defaults
 set menu-timeout 60000
@@ -268,9 +287,19 @@ boot || goto failed
 goto start
 EOF
 else
-  echo "==> Existing ${WORK_DIR}/boot.ipxe found; leaving untouched."
+  echo "==> Existing ${WORK_DIR}/boot.ipxe found; make sure its console line uses '--x 1920 --y 1080'!"
 fi
 
 echo "==> Done! Prepared files in ${WORK_DIR}:"
-ls -lh "${WORK_DIR}/shimx64.efi"        "${WORK_DIR}/snponly-shim.efi"        "${WORK_DIR}/ipxe-shim.efi"        "${WORK_DIR}/snponly.efi"        "${WORK_DIR}/ipxe.efi"        "${WORK_DIR}/wimboot"        "${WORK_DIR}/wimboot.x86_64.efi"        "${WORK_DIR}/autoexec.ipxe"        "${WORK_DIR}/boot.ipxe"        "${WORK_DIR}/usb/glazier-ipxe-x86_64-sb.usb"
-[ -f "${LOGO_FILE}" ] && ls -lh "${LOGO_FILE}" || true
+ls -lh "${WORK_DIR}/shimx64.efi" \
+       "${WORK_DIR}/snponly-shim.efi" \
+       "${WORK_DIR}/ipxe-shim.efi" \
+       "${WORK_DIR}/snponly.efi" \
+       "${WORK_DIR}/ipxe.efi" \
+       "${WORK_DIR}/wimboot" \
+       "${WORK_DIR}/wimboot.x86_64.efi" \
+       "${WORK_DIR}/autoexec.ipxe" \
+       "${WORK_DIR}/boot.ipxe" \
+       "${WORK_DIR}/usb/glazier-ipxe-x86_64-sb.usb"
+[ -f "${WORK_DIR}/logo_dhcp.png" ] && ls -lh "${WORK_DIR}/logo_dhcp.png" || true
+[ -f "${WORK_DIR}/logo.png" ]      && ls -lh "${WORK_DIR}/logo.png"      || true

@@ -27,7 +27,7 @@ To keep this repository public-safe, company-specific files and binary installer
 
 1. **Unattend Files**: Copy `unattend.xml.example` to `unattend.xml` in each desired configuration folder (e.g. `glazier-repo/stable/config/unattend.xml`) and adjust settings/passwords.
 2. **Software Packages**: Place any required deployment tools in `config/` (such as the Office Deployment Tool executable or management client installer).
-3. **Boot Splash Screen (Optional)**: Place an 8-bit indexed 1024x768 PNG named `logo.png` into `glazier-repo/` before running `update-netboot.sh` (see [tools/iPXE/README.md](tools/iPXE/README.md) for image specs).
+3. **Boot Splash Screen (Optional)**: Place an 8-bit indexed 1920x1080 (or 1024x768) PNG named `logo_dhcp.png` (for Stage 1 pre-DHCP) and/or `logo.png` (for Stage 2 boot menu) into `glazier-repo/` before running `update-netboot.sh` (see [tools/iPXE/README.md](tools/iPXE/README.md) for image specs).
 4. **Cloud Build Substitutions**: Provide your GCP bucket and service account details via Cloud Build trigger substitutions:
    - `_CONFIG_SERVER`: URL of your config bucket/server (e.g., `https://storage.googleapis.com/<YOUR-CONFIG-BUCKET>/`)
    - `_STORAGE_BOOT_UPLOAD_PATH`: GCS path for PXE boot files (e.g., `gs://<YOUR-BUCKET>/winpe`)

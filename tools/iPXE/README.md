@@ -17,21 +17,23 @@ The `glazier-repo/update-netboot.sh` script automatically downloads and prepares
 
 ## Custom Splash Screen (logo.png) Specifications
 
-If you wish to display a custom branding splash screen during iPXE boot:
+If you wish to display custom branding splash screens during iPXE boot:
 
-- **File Name**: `logo.png` placed in the `glazier-repo/` directory.
-- **Resolution**: `1024x768` (standard VESA mode supported across UEFI firmwares) or `800x600`.
+- **File Names**:
+  - `logo_dhcp.png`: Splash screen displayed during Stage 1 (hardware init and DHCP in `autoexec.ipxe`). If omitted, `update-netboot.sh` falls back to `logo.png` (or text mode if neither is present).
+  - `logo.png`: Splash screen displayed during Stage 2 (interactive boot menu in `boot.ipxe`).
+- **Resolution**: `1920x1080` (native 16:9 widescreen Full HD recommended for modern UEFI laptops) or `1024x768`.
 - **Color Depth / Format**: **8-bit Indexed PNG (colormap palette)**, non-interlaced, 256 colors maximum.
 - **Why this format matters**: iPXE uses a minimalist embedded PNG decoder. 24-bit/32-bit truecolor or interlaced PNGs can cause memory allocation errors or fail to render in early UEFI video modes.
 - **Tooling to generate compatible PNGs**:
   ```bash
   # Using ImageMagick:
-  convert input.png -resize 1024x768\! -colors 256 -type Palette png8:logo.png
+  convert input.png -resize 1920x1080\! -colors 256 -type Palette png8:logo.png
   
   # Using pngquant:
   pngquant 256 --strip input.png -o logo.png
   ```
-- **Embedding**: When `logo.png` is present, `glazier-repo/update-netboot.sh` automatically encodes it into Base64 and embeds it inline into `autoexec.ipxe`, as well as copying it to the root of the USB boot image. If omitted, a clean text console is used.
+- **Embedding**: When `logo_dhcp.png` (or `logo.png`) is present, `glazier-repo/update-netboot.sh` automatically encodes it into Base64 and embeds it inline into `autoexec.ipxe`, as well as copying all present splash images to the root of the USB boot image. If omitted, a clean text console is used. When errors occur during DHCP or chaining, `autoexec.ipxe` automatically drops the splash screen back to standard text console mode so debug output is clear and unobstructed.
 
 ## Configuration & Boot Files
 

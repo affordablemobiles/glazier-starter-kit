@@ -1,5 +1,8 @@
 #!ipxe
 
+# Re-apply 1920x1080 widescreen background with --keep so it persists across menu redraws
+console --x 1920 --y 1080 --picture ${BUCKET_URL}/logo.png --keep || console --x 1366 --y 768 --picture ${BUCKET_URL}/logo.png --keep || console --x 1024 --y 768 --picture ${BUCKET_URL}/logo.png --keep || console --picture ${BUCKET_URL}/logo.png --keep ||
+
 # Some menu defaults
 set menu-timeout 60000
 set submenu-timeout ${menu-timeout}

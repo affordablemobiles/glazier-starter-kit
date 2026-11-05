@@ -19,6 +19,69 @@ function Write-Log {
     [Console]::Out.Flush()
 }
 
+function Invoke-DownloadWithRetry {
+    Param(
+        [Parameter(Mandatory = $true)]
+        [string]$Url,
+        [Parameter(Mandatory = $true)]
+        [string]$OutFile,
+        [int]$MaxAttempts = 5,
+        [string]$ExpectedMD5 = "",
+        [switch]$VerifyArchive
+    )
+
+    $attempt = 1
+    while ($attempt -le $MaxAttempts) {
+        Write-Log "Downloading $Url -> $OutFile (Attempt $attempt of $MaxAttempts)..." -Color Cyan
+        
+        if (Test-Path $OutFile) {
+            Remove-Item -Path $OutFile -Force -ErrorAction SilentlyContinue
+        }
+
+        # Use curl with built-in retries, connection timeouts, and resume support
+        & curl.exe -fL --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30 -o "$OutFile" "$Url"
+        $curlExit = $LASTEXITCODE
+
+        if ($curlExit -ne 0 -or -not (Test-Path $OutFile) -or ((Get-Item $OutFile).Length -eq 0)) {
+            Write-Log "Warning: curl.exe failed with exit code $curlExit on attempt $attempt." -Color Yellow
+            $attempt++
+            Start-Sleep -Seconds (5 * $attempt)
+            continue
+        }
+
+        # Optional MD5 Hash Check
+        if ($ExpectedMD5 -ne "") {
+            $actualHash = (Get-FileHash -Path $OutFile -Algorithm MD5).Hash
+            if ($actualHash -ne $ExpectedMD5) {
+                Write-Log "Warning: MD5 mismatch (Expected: $ExpectedMD5, Got: $actualHash). Retrying..." -Color Yellow
+                $attempt++
+                Start-Sleep -Seconds 5
+                continue
+            }
+            Write-Log "MD5 hash verified: $actualHash" -Color Green
+        }
+
+        # Optional 7-Zip Archive Integrity Check (.cab, .esd, .zip, .wim)
+        if ($VerifyArchive -and (Test-Path 'C:\Program Files\7-Zip\7z.exe')) {
+            Write-Log "Verifying archive integrity for $OutFile..." -Color Cyan
+            & 'C:\Program Files\7-Zip\7z.exe' t "$OutFile" | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Log "Warning: Archive integrity check (7z t) failed for $OutFile (corrupted/truncated download). Retrying..." -Color Yellow
+                $attempt++
+                Start-Sleep -Seconds 5
+                continue
+            }
+            Write-Log "Archive integrity verified successfully." -Color Green
+        }
+
+        Write-Log "Successfully downloaded $OutFile ($([Math]::Round((Get-Item $OutFile).Length / 1MB, 2)) MB)" -Color Green
+        return
+    }
+
+    Write-Log "CRITICAL: Failed to download a valid copy of $Url after $MaxAttempts attempts." -Color Red
+    exit 1
+}
+
 Write-Log "Starting Glazier WinPE Bootstrap script" -Color Green
 
 # Global non-interactive preferences to avoid silent stdin blocking
@@ -29,10 +92,9 @@ $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
 
 # Disable IE Advanced Security, as it breaks OSDCloud calls:
-Write-Log "Configuring system environment..."
 $IEESC = "HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\{A509B1A7-37EF-4b3f-8CFC-4F3A74704073}"
-Set-ItemProperty -Path $IEESC -Name IsInstalled -Value 0 -ErrorAction SilentlyContinue
-Stop-Process -Name Explorer -Force -ErrorAction SilentlyContinue
+Set-ItemProperty -Path $IEESC -Name IsInstalled -Value 0
+Stop-Process -Name Explorer
 
 # Enable IE Explorer from Cloud Build
 Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2 -ErrorAction SilentlyContinue
@@ -128,12 +190,7 @@ $wirelessConnectUrl = "https://github.com/okieselbach/Helpers/raw/master/Wireles
 $wirelessConnectExe = "$downloadDir\WirelessConnect.exe"
 if ($enableWinRE -and (-not (Test-Path $wirelessConnectExe))) {
     Write-Log "Downloading WirelessConnect.exe for WinPE Wi-Fi GUI..."
-    try {
-        & curl.exe -fsSL -o "$wirelessConnectExe" "$wirelessConnectUrl"
-        Write-Log "Downloaded WirelessConnect.exe successfully" -Color Green
-    } catch {
-        Write-Log "Warning: Could not download WirelessConnect.exe: $_" -Color Yellow
-    }
+    Invoke-DownloadWithRetry -Url $wirelessConnectUrl -OutFile $wirelessConnectExe
 }
 
 # If WinRE is requested, prepare and service WinRE.wim FIRST, then place it in the ADK directory
@@ -175,12 +232,7 @@ if ($enableWinRE) {
         $esdFile = "$osMediaDir\$($fu.FileName)"
         if (-not (Test-Path $esdFile)) {
             Write-Log "Downloading $($fu.FileName) ($($fu.Build)) from Microsoft CDN..." -Color Yellow
-            Write-Log "URL: $($fu.Url)"
-            & curl.exe -fL --progress-bar -o "$esdFile" "$($fu.Url)"
-            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $esdFile)) {
-                Write-Log "Download failed via curl.exe" -Color Red
-                exit 1
-            }
+            Invoke-DownloadWithRetry -Url $fu.Url -OutFile $esdFile -VerifyArchive
         } else {
             Write-Log "ESD already exists at $esdFile"
         }
@@ -211,20 +263,27 @@ if ($enableWinRE) {
 
         Write-Log "Querying Microsoft Update Catalog for Safe OS Dynamic Updates..."
         $updatePkg = $null
-        try {
-            $safeOSUpdate = Get-MSCatalogUpdate -Search "Safe OS Dynamic Update Windows 11 24H2" -ErrorAction SilentlyContinue |
-                Where-Object { $_.Title -match 'x64-based' -and $_.Title -match 'Windows 11' } | Select-Object -First 1
-            if ($safeOSUpdate) {
-                Write-Log "Found Safe OS Dynamic Update: $($safeOSUpdate.Title)" -Color Green
-                $updateDir = "$downloadDir\winre_update"
-                New-Item -ItemType Directory -Path $updateDir -Force | Out-Null
-                Save-MSCatalogUpdate -Update $safeOSUpdate -Destination $updateDir
-                $updatePkg = (Get-ChildItem -Path $updateDir -Include *.cab,*.msu -Recurse | Select-Object -First 1).FullName
-            } else {
-                Write-Log "No newer Safe OS Dynamic Update found, using release WinRE."
+        $catalogRetries = 3
+        for ($cAttempt = 1; $cAttempt -le $catalogRetries; $cAttempt++) {
+            try {
+                $safeOSUpdate = Get-MSCatalogUpdate -Search "Safe OS Dynamic Update Windows 11 24H2" -ErrorAction Stop |
+                    Where-Object { $_.Title -match 'x64-based' -and $_.Title -match 'Windows 11' } | Select-Object -First 1
+                if ($safeOSUpdate) {
+                    Write-Log "Found Safe OS Dynamic Update: $($safeOSUpdate.Title)" -Color Green
+                    $updateDir = "$downloadDir\winre_update"
+                    New-Item -ItemType Directory -Path $updateDir -Force | Out-Null
+                    Save-MSCatalogUpdate -Update $safeOSUpdate -Destination $updateDir -ErrorAction Stop
+                    $updatePkg = (Get-ChildItem -Path $updateDir -Include *.cab,*.msu -Recurse | Select-Object -First 1).FullName
+                } else {
+                    Write-Log "No newer Safe OS Dynamic Update found, using release WinRE."
+                }
+                break
+            } catch {
+                Write-Log "Warning: Microsoft Catalog query/download attempt $cAttempt of $catalogRetries failed: $_" -Color Yellow
+                if ($cAttempt -lt $catalogRetries) {
+                    Start-Sleep -Seconds (5 * $cAttempt)
+                }
             }
-        } catch {
-            Write-Log "Warning during Safe OS update servicing: $_" -Color Yellow
         }
 
         # Mount base WinRE to slipstream updates, client WLAN DLLs, and WirelessConnect.exe
@@ -333,39 +392,29 @@ if ((Get-OSDCloudWorkspace) -eq "C:\OSDCloud") {
     Write-Log "OSDCloud workspace created successfully." -Color Green
 }
 
-# Download Python if needed
-if ((Test-Path $pythonSavePath) -eq $False) {
-    Write-Log "Downloading Python $pyVersion..."
-    & curl.exe -fL --progress-bar -o "$pythonSavePath" "$pyEXEUrl"
-} else {
-    Write-Log "Python $pyVersion was already downloaded."
-}
+Write-Log "Ensuring Python $pyVersion is downloaded and verified..."
+Invoke-DownloadWithRetry -Url $pyEXEUrl -OutFile $pythonSavePath -ExpectedMD5 $pythonInstallHash
 
-# Verify hash of Python installer
-while ((Get-FileHash ($pythonSavePath) -Algorithm MD5).Hash -ne $pythonInstallHash) {
-    Write-Log "Python hashes did not match. Removing and redownloading..." -Color Yellow
-    rm $pythonSavePath
-    & curl.exe -fL --progress-bar -o "$pythonSavePath" "$pyEXEUrl"
-}
-Write-Log "Python installer hash verified: $pythonInstallHash" -Color Green
-
-# Download Intel Wi-Fi Driver Pack (Wi-Fi 6/6E/7 / AX / BE / AC) from Microsoft Catalog
-# This provides the official Netwtw/Netwaw drivers for both Dell and Lenovo ThinkPads
 $intelWifiDir = "$downloadDir\drivers\IntelWiFi"
 if ($enableWinRE) {
     Write-Log "Downloading Intel Wi-Fi Driver Pack (Wi-Fi 6/6E/7 / AX / BE) from Microsoft Update Catalog..." -Color Yellow
     $intelWifiCab = "$downloadDir\IntelWiFi.cab"
     $intelWifiUrl = "https://catalog.s.download.windowsupdate.com/d/msdownload/update/driver/drvs/2026/08/6be0cd42-ff38-4935-8303-c8a05b5d8537_504f637d63eec71ca35526881acfe2d672b2411c.cab"
-    try {
-        & curl.exe -fL --progress-bar -o "$intelWifiCab" "$intelWifiUrl"
-        if (Test-Path "$intelWifiCab") {
-            New-Item -ItemType Directory -Path "$intelWifiDir" -Force | Out-Null
-            & 'C:\Program Files\7-Zip\7z.exe' x "$intelWifiCab" -o"$intelWifiDir" -y | Out-Null
-            Write-Log "Extracted Intel Wi-Fi drivers to $intelWifiDir" -Color Green
-        }
-    } catch {
-        Write-Log "Warning: Could not download Intel Wi-Fi pack from Microsoft Catalog: $_" -Color Yellow
+    
+    # Download and verify cabinet integrity before extracting
+    Invoke-DownloadWithRetry -Url $intelWifiUrl -OutFile $intelWifiCab -VerifyArchive
+
+    if (Test-Path "$intelWifiDir") {
+        Remove-Item -Path "$intelWifiDir" -Recurse -Force -ErrorAction SilentlyContinue
     }
+    New-Item -ItemType Directory -Path "$intelWifiDir" -Force | Out-Null
+    
+    & 'C:\Program Files\7-Zip\7z.exe' x "$intelWifiCab" -o"$intelWifiDir" -y | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Log "CRITICAL: Failed to extract Intel Wi-Fi drivers with 7-Zip (Exit code: $LASTEXITCODE)" -Color Red
+        exit 1
+    }
+    Write-Log "Extracted Intel Wi-Fi drivers to $intelWifiDir" -Color Green
 }
 
 # Install OSDCloud driver packs (Dell Ethernet/Storage, IntelNet, USB, LenovoDock)
@@ -396,7 +445,7 @@ $MountPath = $MountMyWindowsImage.Path
 # Inject Intel Wi-Fi drivers if downloaded
 if (Test-Path "$intelWifiDir") {
     Write-Log "Injecting Intel Wi-Fi drivers into WinPE image..." -Color Yellow
-    Add-WindowsDriver -Path "$MountPath" -Driver "$intelWifiDir" -Recurse -ForceUnsigned | Out-Null
+    Add-WindowsDriver -Path "$MountPath" -Driver "$intelWifiDir" -Recurse -ForceUnsigned -ErrorAction Stop | Out-Null
     Write-Log "Intel Wi-Fi drivers injected successfully." -Color Green
 }
 
@@ -439,7 +488,7 @@ robocopy "C:\Windows\System32\WindowsPowerShell\v1.0\" "$MountPath\Windows\Syste
 robocopy "$scriptPath\" "$MountPath\Windows\System32\WindowsPowerShell\v1.0\" pwrshsip.reg /PURGE /ndl /njh /njs /np | Out-Null
 
 Write-Log "Downloading CA certificates bundle to WIM..."
-& curl.exe -fsSL -o "$MountPath\glazier-resources\ca-certs.crt" "https://curl.se/ca/cacert.pem"
+Invoke-DownloadWithRetry -Url "https://curl.se/ca/cacert.pem" -OutFile "$MountPath\glazier-resources\ca-certs.crt"
 
 Write-Log "Bundling pre-installed NuGet provider, PackageManagement, PowerShellGet, OSD, and MSCatalog into WIM..."
 # 1. Pre-stage the NuGet provider DLL so WinPE never prompts to bootstrap NuGet at runtime

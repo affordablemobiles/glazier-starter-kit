@@ -18,6 +18,7 @@ AutopilotConfigurationFile.json
 /glazier-repo/wimboot.*
 /glazier-repo/*.ipxe
 /glazier-repo/logo.png
+/glazier-repo/logo_dhcp.png
 /glazier-repo/usb/
 *.usb
 
