@@ -701,10 +701,8 @@ foreach ($f in $coreFonts) {
     $srcFont = "$env:SystemRoot\Fonts\$($f.File)"
     $destFont = "$destFontsDir\$($f.File)"
     if (Test-Path $srcFont) {
-        if (-not (Test-Path $destFont)) {
-            Copy-Item -Path $srcFont -Destination $destFont -Force
-            Write-Log "Copied font $($f.File) to WIM Fonts directory."
-        }
+        Copy-Item -Path $srcFont -Destination $destFont -Force
+        Write-Log "Copied font $($f.File) to WIM Fonts directory."
     } else {
         Write-Log "Warning: Host font $srcFont not found." -Color Yellow
     }
@@ -913,9 +911,22 @@ public class Win32Window {
 
     [DllImport("kernel32.dll")]
     public static extern IntPtr GetConsoleWindow();
+
+    [DllImport("gdi32.dll", CharSet = CharSet.Auto)]
+    public static extern int AddFontResource(string lpFileName);
 }
 "@
 Add-Type -TypeDefinition $win32TypeDef -ErrorAction SilentlyContinue
+
+# Ensure core fonts are loaded into the live GDI session
+$fontsDir = "$env:SystemRoot\Fonts"
+$fontFiles = @("segoeui.ttf", "segoeuib.ttf", "segoeuii.ttf", "seguisb.ttf", "consola.ttf", "consolab.ttf")
+foreach ($ff in $fontFiles) {
+    $fp = "$fontsDir\$ff"
+    if (Test-Path $fp) {
+        [Win32Window]::AddFontResource($fp) | Out-Null
+    }
+}
 
 # Step 1: Display & Wallpaper
 # Call Set-WinPEWallpaper.ps1 FIRST so screen resolution is configured before the form centers itself on screen
@@ -970,7 +981,7 @@ function Test-WinPENetwork {
 # Construct Boot Progress GUI
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Glazier WinPE Initialization"
-$form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
+$form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::None
 $form.ClientSize = New-Object System.Drawing.Size(620, 250)
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
@@ -982,7 +993,7 @@ $form.BackColor = [System.Drawing.Color]::FromArgb(245, 247, 250)
 # Title Label: Location = (28, 22), Size = (564, 36)
 $lblTitle = New-Object System.Windows.Forms.Label
 $lblTitle.Text = "Preparing Glazier Environment"
-$lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 15, [System.Drawing.FontStyle]::Bold)
+$lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 20, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
 $lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
 $lblTitle.Location = New-Object System.Drawing.Point(28, 22)
 $lblTitle.Size = New-Object System.Drawing.Size(564, 36)
@@ -991,7 +1002,7 @@ $form.Controls.Add($lblTitle)
 # Step Status Label: Location = (28, 64), Size = (564, 28)
 $lblStatus = New-Object System.Windows.Forms.Label
 $lblStatus.Text = "Step 1 of 4: Initializing environment..."
-$lblStatus.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Regular)
+$lblStatus.Font = New-Object System.Drawing.Font("Segoe UI", 13, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
 $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(51, 65, 85)
 $lblStatus.Location = New-Object System.Drawing.Point(28, 64)
 $lblStatus.Size = New-Object System.Drawing.Size(564, 28)
@@ -1008,7 +1019,7 @@ $form.Controls.Add($progressBar)
 # Detail / Sub-status Label: Location = (28, 134), Size = (564, 24)
 $lblDetail = New-Object System.Windows.Forms.Label
 $lblDetail.Text = "Configuring system settings..."
-$lblDetail.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Regular)
+$lblDetail.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
 $lblDetail.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
 $lblDetail.Location = New-Object System.Drawing.Point(28, 134)
 $lblDetail.Size = New-Object System.Drawing.Size(564, 24)
@@ -1017,7 +1028,7 @@ $form.Controls.Add($lblDetail)
 # Bottom Buttons (Y = 178, Height = 38):
 $btnLogToggle = New-Object System.Windows.Forms.Button
 $btnLogToggle.Text = "Show Debug Log ▾"
-$btnLogToggle.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Regular)
+$btnLogToggle.Font = New-Object System.Drawing.Font("Segoe UI", 13, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
 $btnLogToggle.Location = New-Object System.Drawing.Point(28, 178)
 $btnLogToggle.Size = New-Object System.Drawing.Size(160, 38)
 $btnLogToggle.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -1028,7 +1039,7 @@ $form.Controls.Add($btnLogToggle)
 
 $btnTerminal = New-Object System.Windows.Forms.Button
 $btnTerminal.Text = "Open Terminal"
-$btnTerminal.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Regular)
+$btnTerminal.Font = New-Object System.Drawing.Font("Segoe UI", 13, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
 $btnTerminal.Location = New-Object System.Drawing.Point(200, 178)
 $btnTerminal.Size = New-Object System.Drawing.Size(150, 38)
 $btnTerminal.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -1041,7 +1052,7 @@ $form.Controls.Add($btnTerminal)
 $txtLog = New-Object System.Windows.Forms.TextBox
 $txtLog.Location = New-Object System.Drawing.Point(28, 232)
 $txtLog.Size = New-Object System.Drawing.Size(564, 184)
-$txtLog.Font = New-Object System.Drawing.Font("Consolas", 9, [System.Drawing.FontStyle]::Regular)
+$txtLog.Font = New-Object System.Drawing.Font("Consolas", 12, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
 $txtLog.Multiline = $true
 $txtLog.ReadOnly = $true
 $txtLog.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
@@ -1195,12 +1206,12 @@ try {
         -ArgumentList "-NoProfile -NoLogo -ExecutionPolicy Bypass -File `"$updateScriptFile`"" `
         -RedirectStandardOutput $updateLog `
         -RedirectStandardError $updateErrLog `
-        -WindowStyle Hidden -PassThru
+        -NoNewWindow -PassThru
 
     $lastLineCount = 0
     while (-not $updateProc.HasExited) {
         if (Test-Path $updateLog) {
-            $lines = Get-Content -Path $updateLog -ErrorAction SilentlyContinue
+            $lines = @(Get-Content -Path $updateLog -ErrorAction SilentlyContinue)
             if ($lines -and $lines.Count -gt $lastLineCount) {
                 for ($i = $lastLineCount; $i -lt $lines.Count; $i++) {
                     if ($lines[$i]) {
@@ -1215,7 +1226,7 @@ try {
     }
 
     if (Test-Path $updateLog) {
-        $lines = Get-Content -Path $updateLog -ErrorAction SilentlyContinue
+        $lines = @(Get-Content -Path $updateLog -ErrorAction SilentlyContinue)
         if ($lines -and $lines.Count -gt $lastLineCount) {
             for ($i = $lastLineCount; $i -lt $lines.Count; $i++) {
                 if ($lines[$i]) {

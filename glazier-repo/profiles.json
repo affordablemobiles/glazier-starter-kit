@@ -1,5 +1,5 @@
 {
-  "timeout_seconds": 120,
+  "timeout_seconds": 600,
   "default_profile": "windows-stable",
   "profiles": [
     {
