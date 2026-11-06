@@ -1065,10 +1065,9 @@ $lblStatus.Location = New-Object System.Drawing.Point(28, 64)
 $lblStatus.Size = New-Object System.Drawing.Size(564, 28)
 $form.Controls.Add($lblStatus)
 
-# 2-Panel Custom Sliding Progress Bar (100% theme-independent & color-coded)
+# 3-Panel Percentage Fill Bar with Aero Shimmer Pulse (100% theme-independent & color-coded)
 $trackW = 564
 $trackH = 26
-$fillW = [Math]::Max(40, [int]($trackW * 0.28))
 
 $progressTrack = New-Object System.Windows.Forms.Panel
 $progressTrack.Location = New-Object System.Drawing.Point(28, 100)
@@ -1079,9 +1078,21 @@ $form.Controls.Add($progressTrack)
 
 $progressFill = New-Object System.Windows.Forms.Panel
 $progressFill.Location = New-Object System.Drawing.Point(0, 0)
-$progressFill.Size = New-Object System.Drawing.Size($fillW, $trackH)
+$progressFill.Size = New-Object System.Drawing.Size([Math]::Max(40, [int]($trackW * 0.25)), $trackH)
 $progressFill.BackColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
 $progressTrack.Controls.Add($progressFill)
+
+$progressPulse = New-Object System.Windows.Forms.Panel
+$progressPulse.Location = New-Object System.Drawing.Point(-70, 0)
+$progressPulse.Size = New-Object System.Drawing.Size(70, $trackH)
+$progressPulse.BackColor = [System.Drawing.Color]::FromArgb(96, 165, 250)
+$progressFill.Controls.Add($progressPulse)
+
+$progressPulseCore = New-Object System.Windows.Forms.Panel
+$progressPulseCore.Location = New-Object System.Drawing.Point(20, 0)
+$progressPulseCore.Size = New-Object System.Drawing.Size(30, $trackH)
+$progressPulseCore.BackColor = [System.Drawing.Color]::FromArgb(147, 197, 253)
+$progressPulse.Controls.Add($progressPulseCore)
 
 # Detail / Sub-status Label: Location = (28, 134), Size = (564, 24)
 $lblDetail = New-Object System.Windows.Forms.Label
@@ -1171,16 +1182,20 @@ try {
     $form.Show()
     [System.Windows.Forms.Application]::DoEvents()
 
-    $script:barPos = 0
+    $script:shimmerPos = -70
     function Pulse-Progress {
-        $script:barPos = ($script:barPos + 18) % ($trackW + $fillW)
-        $progressFill.Left = $script:barPos - $fillW
+        $script:shimmerPos = ($script:shimmerPos + 16)
+        if ($script:shimmerPos -gt ($progressFill.Width + 70)) {
+            $script:shimmerPos = -70
+        }
+        $progressPulse.Left = $script:shimmerPos
         [System.Windows.Forms.Application]::DoEvents()
     }
 
     Add-Log -Message "Glazier WinPE initialization started." -Detail "Display configured."
 
     # Step 1 of 4: Initializing WinPE hardware and drivers (wpeinit)
+    $progressFill.Width = [int]($trackW * 0.25)
     Set-Step -Status "Step 1 of 4: Initializing WinPE hardware and drivers (wpeinit)..." -Detail "Running wpeinit.exe..."
     $wpeProc = Start-Process -FilePath "$env:SystemRoot\System32\wpeinit.exe" -NoNewWindow -PassThru
     while (-not $wpeProc.HasExited) {
@@ -1194,6 +1209,7 @@ try {
     }
 
     # Step 2: Zero-Dependency Network Detection & Polling
+    $progressFill.Width = [int]($trackW * 0.50)
     Set-Step -Status "Step 2 of 4: Checking network connectivity..." -Detail "Checking network interfaces..."
 
     # Start WlanSvc if present and not running
@@ -1274,6 +1290,7 @@ try {
     }
 
     # Step 3: Keep OSD & MSCatalog Module Updates with Visible GUI Feedback
+    $progressFill.Width = [int]($trackW * 0.75)
     Set-Step -Status "Step 3 of 4: Updating OSD & MSCatalog PowerShell modules (this may take a minute)..." -Detail "Checking for module updates..."
 
     $updateScriptContent = @(
@@ -1346,6 +1363,7 @@ try {
     # Step 4: Hand-off
     Set-Step -Status "Step 4 of 4: Launching Glazier Profile Menu..." -Detail "Starting Glazier autobuild..."
     Add-Log -Message "Initialization complete. Handing off to autobuild.ps1..."
+    $progressPulse.Visible = $false
     $progressFill.Location = New-Object System.Drawing.Point(0, 0)
     $progressFill.Size = New-Object System.Drawing.Size($trackW, $trackH)
     $progressFill.BackColor = [System.Drawing.Color]::FromArgb(22, 163, 74)

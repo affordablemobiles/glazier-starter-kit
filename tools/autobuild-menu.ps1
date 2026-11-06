@@ -732,6 +732,118 @@ function Start-GlazierDeploymentGUI {
             Start-Process -FilePath "cmd.exe" -ArgumentList '/c start "Glazier Debug Shell" PowerShell.exe -NoProfile -NoLogo -NoExit'
         }
 
+        $saveLogsAction = {
+            $form.TopMost = $false
+            try {
+                Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+
+                $usbDrive = [System.IO.DriveInfo]::GetDrives() |
+                    Where-Object { $_.DriveType -eq [System.IO.DriveType]::Removable -and $_.IsReady } |
+                    Select-Object -First 1
+
+                $initDir = if ($usbDrive) { $usbDrive.RootDirectory.FullName } else { $rootDrive + "\" }
+
+                $serial = "UNKNOWN"
+                try {
+                    $bios = Get-CimInstance -ClassName Win32_BIOS -ErrorAction SilentlyContinue
+                    if ($bios -and $bios.SerialNumber) { $serial = $bios.SerialNumber.Trim() }
+                } catch {}
+
+                $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+                $defaultName = "Glazier-Logs-$serial-$timestamp.zip"
+
+                $sfd = New-Object System.Windows.Forms.SaveFileDialog
+                $sfd.Title = "Save Glazier Deployment Logs"
+                $sfd.Filter = "ZIP Archive (*.zip)|*.zip|Combined Log File (*.log)|*.log|All Files (*.*)|*.*"
+                $sfd.FileName = $defaultName
+                $sfd.InitialDirectory = $initDir
+
+                if ($sfd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+                    $savePath = $sfd.FileName
+                    $discoveredLogs = @()
+
+                    $logCandidates = @(
+                        "X:\glazier_cache\glazier.log",
+                        "C:\glazier_cache\glazier.log",
+                        "C:\Windows\Logs\Glazier\glazier.log",
+                        "$env:TEMP\glazier_stdout.log",
+                        "$env:TEMP\glazier_stderr.log",
+                        "$env:TEMP\update_modules.log",
+                        "$env:TEMP\update_modules_err.log",
+                        "X:\Windows\Logs\DISM\dism.log",
+                        "C:\Windows\Logs\DISM\dism.log"
+                    )
+                    foreach ($lc in $logCandidates) {
+                        if (Test-Path $lc) { $discoveredLogs += $lc }
+                    }
+
+                    $osdDirs = @("X:\OSDCloud\Logs", "C:\OSDCloud\Logs")
+                    foreach ($od in $osdDirs) {
+                        if (Test-Path $od) {
+                            $discoveredLogs += (Get-ChildItem -Path $od -Filter "*.log" -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+                        }
+                    }
+
+                    if ($savePath.ToLower().EndsWith(".zip")) {
+                        $tempStaging = "$env:TEMP\glazier_log_bundle_$timestamp"
+                        if (Test-Path $tempStaging) { Remove-Item $tempStaging -Recurse -Force -ErrorAction SilentlyContinue }
+                        New-Item -ItemType Directory -Path $tempStaging -Force | Out-Null
+
+                        Set-Content -Path "$tempStaging\console_transcript.log" -Value $txtOutput.Text -Encoding UTF8 -Force
+
+                        foreach ($lf in $discoveredLogs) {
+                            if (Test-Path $lf) {
+                                $fname = Split-Path -Leaf $lf
+                                $destLog = "$tempStaging\$fname"
+                                if (Test-Path $destLog) {
+                                    $parentDir = Split-Path -Parent $lf | Split-Path -Leaf
+                                    $destLog = "$tempStaging\${parentDir}_$fname"
+                                }
+                                Copy-Item -Path $lf -Destination $destLog -Force -ErrorAction SilentlyContinue
+                            }
+                        }
+
+                        if (Test-Path $savePath) { Remove-Item -Path $savePath -Force -ErrorAction SilentlyContinue }
+                        [System.IO.Compression.ZipFile]::CreateFromDirectory($tempStaging, $savePath)
+                        Remove-Item -Path $tempStaging -Recurse -Force -ErrorAction SilentlyContinue
+                    } else {
+                        $combined = @()
+                        $combined += "================================================================================"
+                        $combined += "GLAZIER DEPLOYMENT CONSOLE TRANSCRIPT - $timestamp"
+                        $combined += "================================================================================"
+                        $combined += $txtOutput.Text
+                        $combined += ""
+                        foreach ($lf in $discoveredLogs) {
+                            if (Test-Path $lf) {
+                                $combined += "================================================================================"
+                                $combined += "LOG FILE: $lf"
+                                $combined += "================================================================================"
+                                $combined += (Get-Content -Path $lf -Raw -ErrorAction SilentlyContinue)
+                                $combined += ""
+                            }
+                        }
+                        Set-Content -Path $savePath -Value ($combined -join "`r`n") -Encoding UTF8 -Force
+                    }
+
+                    [System.Windows.Forms.MessageBox]::Show(
+                        "Logs saved successfully to:`r`n$savePath",
+                        "Logs Saved",
+                        [System.Windows.Forms.MessageBoxButtons]::OK,
+                        [System.Windows.Forms.MessageBoxIcon]::Information
+                    )
+                }
+            } catch {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Failed to save logs: $_",
+                    "Error",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Error
+                )
+            } finally {
+                $form.TopMost = $true
+            }
+        }
+
         $form.Add_KeyDown({
             if ($_.KeyCode -eq [System.Windows.Forms.Keys]::F12 -or ($_.Control -and $_.KeyCode -eq [System.Windows.Forms.Keys]::T)) {
                 & $openShellAction
@@ -796,10 +908,9 @@ function Start-GlazierDeploymentGUI {
         $lblStage.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
         $panelHeader.Controls.Add($lblStage)
 
-        # 2-Panel Custom Sliding Progress Bar (100% theme-independent & color-coded)
+        # 3-Panel Percentage Fill Bar with Aero Shimmer Pulse
         $trackW = $formW - 140
         $trackH = 22
-        $fillW = [Math]::Max(40, [int]($trackW * 0.28))
 
         $progressTrack = New-Object System.Windows.Forms.Panel
         $progressTrack.Location = New-Object System.Drawing.Point(82, 72)
@@ -808,11 +919,25 @@ function Start-GlazierDeploymentGUI {
         $progressTrack.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
         $panelHeader.Controls.Add($progressTrack)
 
+        # Middle Completed-Percentage Panel (grows left-to-right)
         $progressFill = New-Object System.Windows.Forms.Panel
         $progressFill.Location = New-Object System.Drawing.Point(0, 0)
-        $progressFill.Size = New-Object System.Drawing.Size($fillW, $trackH)
+        $progressFill.Size = New-Object System.Drawing.Size([Math]::Max(36, [int]($trackW * 0.08)), $trackH)
         $progressFill.BackColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
         $progressTrack.Controls.Add($progressFill)
+
+        # Inner Aero Shimmer Highlight Panel (child of $progressFill so Windows GDI clips it automatically!)
+        $progressPulse = New-Object System.Windows.Forms.Panel
+        $progressPulse.Location = New-Object System.Drawing.Point(-70, 0)
+        $progressPulse.Size = New-Object System.Drawing.Size(70, $trackH)
+        $progressPulse.BackColor = [System.Drawing.Color]::FromArgb(96, 165, 250)
+        $progressFill.Controls.Add($progressPulse)
+
+        $progressPulseCore = New-Object System.Windows.Forms.Panel
+        $progressPulseCore.Location = New-Object System.Drawing.Point(20, 0)
+        $progressPulseCore.Size = New-Object System.Drawing.Size(30, $trackH)
+        $progressPulseCore.BackColor = [System.Drawing.Color]::FromArgb(147, 197, 253)
+        $progressPulse.Controls.Add($progressPulseCore)
 
         # Terminal Header Panel
         $panelTermHeader = New-Object System.Windows.Forms.Panel
@@ -833,8 +958,8 @@ function Start-GlazierDeploymentGUI {
         $chkAutoScroll = New-Object System.Windows.Forms.CheckBox
         $chkAutoScroll.Text = "Auto-scroll"
         $chkAutoScroll.Checked = $true
-        $chkAutoScroll.Location = New-Object System.Drawing.Point($panelTermHeader.Width - 340, 6)
-        $chkAutoScroll.Size = New-Object System.Drawing.Size(105, 24)
+        $chkAutoScroll.Location = New-Object System.Drawing.Point($panelTermHeader.Width - 445, 6)
+        $chkAutoScroll.Size = New-Object System.Drawing.Size(100, 24)
         $chkAutoScroll.ForeColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
         $chkAutoScroll.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
         $panelTermHeader.Controls.Add($chkAutoScroll)
@@ -842,7 +967,7 @@ function Start-GlazierDeploymentGUI {
         # Open Shell / Terminal button (always present and clickable)
         $btnTerminal = New-Object System.Windows.Forms.Button
         $btnTerminal.Text = "Open Shell"
-        $btnTerminal.Location = New-Object System.Drawing.Point($panelTermHeader.Width - 225, 4)
+        $btnTerminal.Location = New-Object System.Drawing.Point($panelTermHeader.Width - 335, 4)
         $btnTerminal.Size = New-Object System.Drawing.Size(105, 28)
         $btnTerminal.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
         $btnTerminal.BackColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
@@ -851,11 +976,23 @@ function Start-GlazierDeploymentGUI {
         $btnTerminal.Add_Click($openShellAction)
         $panelTermHeader.Controls.Add($btnTerminal)
 
+        # Save Logs button (always present, highlighted on failure)
+        $btnSaveLogs = New-Object System.Windows.Forms.Button
+        $btnSaveLogs.Text = "Save Logs..."
+        $btnSaveLogs.Location = New-Object System.Drawing.Point($panelTermHeader.Width - 220, 4)
+        $btnSaveLogs.Size = New-Object System.Drawing.Size(105, 28)
+        $btnSaveLogs.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+        $btnSaveLogs.BackColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
+        $btnSaveLogs.ForeColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
+        $btnSaveLogs.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
+        $btnSaveLogs.Add_Click($saveLogsAction)
+        $panelTermHeader.Controls.Add($btnSaveLogs)
+
         # Reboot PC button (hidden initially, shown on failure)
         $btnReboot = New-Object System.Windows.Forms.Button
         $btnReboot.Text = "Reboot PC"
-        $btnReboot.Location = New-Object System.Drawing.Point($panelTermHeader.Width - 110, 4)
-        $btnReboot.Size = New-Object System.Drawing.Size(100, 28)
+        $btnReboot.Location = New-Object System.Drawing.Point($panelTermHeader.Width - 105, 4)
+        $btnReboot.Size = New-Object System.Drawing.Size(95, 28)
         $btnReboot.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
         $btnReboot.BackColor = [System.Drawing.Color]::FromArgb(185, 28, 28)
         $btnReboot.ForeColor = [System.Drawing.Color]::White
@@ -926,18 +1063,35 @@ function Start-GlazierDeploymentGUI {
             if (Test-Path $wifiDir) {
                 try {
                     Start-Service -Name WlanSvc -ErrorAction SilentlyContinue
+                    # Wait up to 10 seconds for WlanSvc to initialize and enumerate wireless interface
+                    for ($wInit = 1; $wInit -le 10; $wInit++) {
+                        $wlanIfaces = (& netsh.exe wlan show interfaces 2>$null) -join "`n"
+                        if ($wlanIfaces -match 'Name\s*:') { break }
+                        $script:shimmerPos = ($script:shimmerPos + 16)
+                        if ($script:shimmerPos -gt ($progressFill.Width + 70)) { $script:shimmerPos = -70 }
+                        $progressPulse.Left = $script:shimmerPos
+                        [System.Windows.Forms.Application]::DoEvents()
+                        Start-Sleep -Milliseconds 1000
+                    }
+
                     $pFiles = Get-ChildItem -Path $wifiDir -Filter "*.xml" -ErrorAction SilentlyContinue
                     foreach ($pf in $pFiles) {
                         & netsh.exe wlan add profile filename="$($pf.FullName)" user=all | Out-Null
-                        try {
-                            [xml]$px = Get-Content -Path $pf.FullName -ErrorAction SilentlyContinue
-                            $pn = if ($px -and $px.WLANProfile) { $px.WLANProfile.name } else { $pf.BaseName }
-                            if ($pn) {
-                                & netsh.exe wlan connect name="$pn" | Out-Null
-                            }
-                        } catch {}
+                        if ($LASTEXITCODE -eq 0) {
+                            try {
+                                [xml]$px = Get-Content -Path $pf.FullName -ErrorAction SilentlyContinue
+                                $pn = if ($px -and $px.WLANProfile) { $px.WLANProfile.name } else { $pf.BaseName }
+                                if ($pn) {
+                                    & netsh.exe wlan connect name="$pn" | Out-Null
+                                }
+                            } catch {}
+                            Remove-Item -Path $pf.FullName -Force -ErrorAction SilentlyContinue
+                        }
                     }
-                    Remove-Item -Path $wifiDir -Recurse -Force -ErrorAction SilentlyContinue
+                    $remainingXml = Get-ChildItem -Path $wifiDir -Filter "*.xml" -ErrorAction SilentlyContinue
+                    if (-not $remainingXml -or $remainingXml.Count -eq 0) {
+                        Remove-Item -Path $wifiDir -Recurse -Force -ErrorAction SilentlyContinue
+                    }
                 } catch {}
             }
 
@@ -947,8 +1101,9 @@ function Start-GlazierDeploymentGUI {
                 for ($nSec = 1; $nSec -le 15; $nSec++) {
                     $netOk = Test-WinPENetwork
                     if ($netOk) { break }
-                    $script:barPos = ($script:barPos + 18) % ($trackW + $fillW)
-                    $progressFill.Left = $script:barPos - $fillW
+                    $script:shimmerPos = ($script:shimmerPos + 16)
+                    if ($script:shimmerPos -gt ($progressFill.Width + 70)) { $script:shimmerPos = -70 }
+                    $progressPulse.Left = $script:shimmerPos
                     [System.Windows.Forms.Application]::DoEvents()
                     Start-Sleep -Milliseconds 1000
                 }
@@ -968,8 +1123,9 @@ function Start-GlazierDeploymentGUI {
                         for ($wSec = 1; $wSec -le 10; $wSec++) {
                             $netOk = Test-WinPENetwork
                             if ($netOk) { break }
-                            $script:barPos = ($script:barPos + 18) % ($trackW + $fillW)
-                            $progressFill.Left = $script:barPos - $fillW
+                            $script:shimmerPos = ($script:shimmerPos + 16)
+                            if ($script:shimmerPos -gt ($progressFill.Width + 70)) { $script:shimmerPos = -70 }
+                            $progressPulse.Left = $script:shimmerPos
                             [System.Windows.Forms.Application]::DoEvents()
                             Start-Sleep -Milliseconds 1000
                         }
@@ -1007,7 +1163,10 @@ function Start-GlazierDeploymentGUI {
         $script:totalPhaseTasks = 0
         $script:lastGlazierError = ""
         $script:lastLogLine = ""
-        $script:barPos = 0
+        $script:lastTaskSig = ""
+        $script:subTaskPct = 0
+        $script:currentOverallPct = 6
+        $script:shimmerPos = -70
         $pulseFrames = @("[.  ]", "[.. ]", "[...]", "[ ..]", "[  .]", "[   ]")
         $pulseIdx = 0
 
@@ -1018,13 +1177,22 @@ function Start-GlazierDeploymentGUI {
                 $pulseIdx = ($pulseIdx + 1) % $pulseFrames.Length
                 $lblBadge.Text = $pulseFrames[$pulseIdx]
 
-                # Slide the custom progress bar smoothly
-                $script:barPos = ($script:barPos + 18) % ($trackW + $fillW)
-                $progressFill.Left = $script:barPos - $fillW
+                # Update progress bar width based on overall percentage
+                $fillPct = [Math]::Min(98, [Math]::Max(6, $script:currentOverallPct))
+                $targetFillW = [Math]::Max(36, [int]($trackW * ($fillPct / 100.0)))
+                $progressFill.Width = [Math]::Min($trackW, $targetFillW)
+
+                # Sweep shimmer pulse across completed portion
+                $script:shimmerPos = ($script:shimmerPos + 16)
+                if ($script:shimmerPos -gt ($progressFill.Width + 70)) {
+                    $script:shimmerPos = -70
+                }
+                $progressPulse.Left = $script:shimmerPos
 
                 $chunk = $outReader.ReadToEnd()
                 if ($chunk) {
-                    $cleanChunk = [regex]::Replace($chunk, "\r\n|\r|\n", "`r`n")
+                    $cleanChunk = [regex]::Replace($chunk, "\x1b\[[0-9;]*[a-zA-Z]", "")
+                    $cleanChunk = [regex]::Replace($cleanChunk, "\r\n|\r|\n", "`r`n")
                     $txtOutput.AppendText($cleanChunk)
                     $hasNewText = $true
                     foreach ($line in ($cleanChunk -split "`r?`n")) {
@@ -1040,7 +1208,8 @@ function Start-GlazierDeploymentGUI {
 
                 $errChunk = $errReader.ReadToEnd()
                 if ($errChunk) {
-                    $cleanErr = [regex]::Replace($errChunk, "\r\n|\r|\n", "`r`n")
+                    $cleanErr = [regex]::Replace($errChunk, "\x1b\[[0-9;]*[a-zA-Z]", "")
+                    $cleanErr = [regex]::Replace($cleanErr, "\r\n|\r|\n", "`r`n")
                     $txtOutput.AppendText($cleanErr)
                     $hasNewText = $true
                     foreach ($line in ($cleanErr -split "`r?`n")) {
@@ -1071,7 +1240,8 @@ function Start-GlazierDeploymentGUI {
             # Drain any remaining bytes after exit
             $finalOut = $outReader.ReadToEnd()
             if ($finalOut) {
-                $cleanFinalOut = [regex]::Replace($finalOut, "\r\n|\r|\n", "`r`n")
+                $cleanFinalOut = [regex]::Replace($finalOut, "\x1b\[[0-9;]*[a-zA-Z]", "")
+                $cleanFinalOut = [regex]::Replace($cleanFinalOut, "\r\n|\r|\n", "`r`n")
                 $txtOutput.AppendText($cleanFinalOut)
                 foreach ($line in ($cleanFinalOut -split "`r?`n")) {
                     if ($line -match 'CRITICAL|Error Code|Exception|Error encountered|FAILED') {
@@ -1081,7 +1251,8 @@ function Start-GlazierDeploymentGUI {
             }
             $finalErr = $errReader.ReadToEnd()
             if ($finalErr) {
-                $cleanFinalErr = [regex]::Replace($finalErr, "\r\n|\r|\n", "`r`n")
+                $cleanFinalErr = [regex]::Replace($finalErr, "\x1b\[[0-9;]*[a-zA-Z]", "")
+                $cleanFinalErr = [regex]::Replace($cleanFinalErr, "\r\n|\r|\n", "`r`n")
                 $txtOutput.AppendText($cleanFinalErr)
                 foreach ($line in ($cleanFinalErr -split "`r?`n")) {
                     if ($line -match 'CRITICAL|Error Code|Exception|Error encountered|FAILED') {
@@ -1106,6 +1277,7 @@ function Start-GlazierDeploymentGUI {
             $lblBadge.ForeColor = [System.Drawing.Color]::White
             $lblTitle.Text = "Stage Complete - Rebooting..."
             $lblStage.Text = "Glazier tasks completed successfully. Rebooting system..."
+            $progressPulse.Visible = $false
             $progressFill.Location = New-Object System.Drawing.Point(0, 0)
             $progressFill.Size = New-Object System.Drawing.Size($trackW, $trackH)
             $progressFill.BackColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
@@ -1133,9 +1305,11 @@ function Start-GlazierDeploymentGUI {
             } else {
                 $lblStage.Text = "An error occurred during deployment. Take a photo of this screen and send to IT Support."
             }
+            $progressPulse.Visible = $false
             $progressFill.Location = New-Object System.Drawing.Point(0, 0)
             $progressFill.Size = New-Object System.Drawing.Size($trackW, $trackH)
             $progressFill.BackColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
+            $btnSaveLogs.BackColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
             $btnReboot.Visible = $true
             [void][Win32WindowHelper]::SendMessage($txtOutput.Handle, 0x0115, [IntPtr]7, [IntPtr]::Zero)
 

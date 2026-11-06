@@ -43,12 +43,16 @@ def _clean_chunk_report(self, bytes_so_far: int, total_size: int):
   pct = int((float(bytes_so_far) / total_size) * 100)
   bucket = (pct // 10) * 10
   last_bucket = getattr(self, '_last_pct_bucket', -1)
-  if bucket != last_bucket or bytes_so_far >= total_size:
+  if bucket < last_bucket:
+    last_bucket = -1
+  if bucket != last_bucket:
     self._last_pct_bucket = bucket
+    mb_done = bytes_so_far / (1024.0 * 1024.0)
+    mb_total = total_size / (1024.0 * 1024.0)
     logging.info(
-        'Download progress: %s / %s (%d%%)',
-        self._ConvertBytes(bytes_so_far),
-        self._ConvertBytes(total_size),
+        'Download progress: %.1f MB / %.1f MB (%d%%)',
+        mb_done,
+        mb_total,
         pct,
     )
 download.BaseDownloader._DownloadChunkReport = _clean_chunk_report
