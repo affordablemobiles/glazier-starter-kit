@@ -282,6 +282,7 @@ goto start
 
 :glazier_prod
 kernel ${BUCKET_URL}/wimboot
+initrd ${BUCKET_URL}/menu/autobuild.ps1          autobuild.ps1
 initrd ${BOOT_URL}/Boot/BCD                      BCD
 initrd ${BOOT_URL}/Boot/boot.sdi                 boot.sdi
 initrd ${BOOT_URL}/sources/boot.wim              boot.wim

@@ -970,11 +970,23 @@ public class Win32Window {
 
     [DllImport("user32.dll")]
     public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    public static extern uint SetThreadExecutionState(uint esFlags);
+
+    public const uint ES_CONTINUOUS = 0x80000000;
+    public const uint ES_SYSTEM_REQUIRED = 0x00000001;
+    public const uint ES_DISPLAY_REQUIRED = 0x00000002;
 }
 "@
 if (-not ('Win32Window' -as [type])) {
     Add-Type -TypeDefinition $win32TypeDef -ErrorAction SilentlyContinue
 }
+
+# Assert Wake Lock (ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)
+try {
+    [void][Win32Window]::SetThreadExecutionState(0x80000003)
+} catch {}
 
 # Minimize (DO NOT Hide) Parent Console immediately so Startnet.cmd disappears to the taskbar within ~1 second
 $consoleHwnd = [Win32Window]::GetConsoleWindow()
@@ -1184,6 +1196,7 @@ try {
 
     $script:shimmerPos = -70
     function Pulse-Progress {
+        try { [void][Win32Window]::SetThreadExecutionState(0x80000003) } catch {}
         $script:shimmerPos = ($script:shimmerPos + 16)
         if ($script:shimmerPos -gt ($progressFill.Width + 70)) {
             $script:shimmerPos = -70

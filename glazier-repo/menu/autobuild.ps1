@@ -116,6 +116,21 @@ public class Win32WindowHelper {
     [DllImport("user32.dll")]
     public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+    public static readonly IntPtr HWND_BOTTOM = new IntPtr(1);
+    public const uint SWP_NOSIZE = 0x0001;
+    public const uint SWP_NOMOVE = 0x0002;
+    public const uint SWP_NOACTIVATE = 0x0010;
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    public static extern uint SetThreadExecutionState(uint esFlags);
+
+    public const uint ES_CONTINUOUS = 0x80000000;
+    public const uint ES_SYSTEM_REQUIRED = 0x00000001;
+    public const uint ES_DISPLAY_REQUIRED = 0x00000002;
+
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern IntPtr GetStdHandle(int nStdHandle);
 
@@ -155,6 +170,11 @@ foreach ($ff in $fontFiles) {
 
 function Show-GlazierProfileGUI {
     param([hashtable]$MenuData)
+
+    # Assert Wake Lock (ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)
+    try {
+        [void][Win32WindowHelper]::SetThreadExecutionState(0x80000003)
+    } catch {}
 
     $profiles = $MenuData.profiles
     $defaultId = $MenuData.default_profile
@@ -375,6 +395,7 @@ function Show-GlazierProfileGUI {
                     [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 6) # SW_MINIMIZE
                 }
             } catch {}
+            $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
             $form.Activate()
             $form.BringToFront()
         })
@@ -714,6 +735,18 @@ function Start-GlazierDeploymentGUI {
         }
     }
 
+    # Assert Wake Lock (ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)
+    try {
+        [void][Win32WindowHelper]::SetThreadExecutionState(0x80000003)
+    } catch {}
+
+    # In Phase 2 Windows, disable AC/DC standby, hibernate, and monitor timeouts
+    if (-not $isWinPE) {
+        foreach ($setting in @('standby-timeout-ac', 'standby-timeout-dc', 'hibernate-timeout-ac', 'hibernate-timeout-dc', 'monitor-timeout-ac', 'monitor-timeout-dc')) {
+            & powercfg.exe /change $setting 0 2>$null | Out-Null
+        }
+    }
+
     # Ensure core fonts are loaded into live GDI session
     $fontsDir = "$env:SystemRoot\Fonts"
     $fontFiles = @("segoeui.ttf", "segoeuib.ttf", "segoeuii.ttf", "seguisb.ttf", "consola.ttf", "consolab.ttf")
@@ -723,6 +756,9 @@ function Start-GlazierDeploymentGUI {
             [void][Win32WindowHelper]::AddFontResource($fp)
         }
     }
+
+    $bgForm = $null
+    $form = $null
 
     try {
         Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
@@ -747,7 +783,7 @@ function Start-GlazierDeploymentGUI {
         $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
         $form.MaximizeBox = $false
         $form.MinimizeBox = $false
-        $form.TopMost = $true
+        $form.TopMost = $isWinPE
         $form.BackColor = [System.Drawing.Color]::FromArgb(245, 247, 250)
         $form.KeyPreview = $true
 
@@ -791,6 +827,7 @@ function Start-GlazierDeploymentGUI {
                         "X:\glazier_cache\glazier.log",
                         "C:\glazier_cache\glazier.log",
                         "C:\Windows\Logs\Glazier\glazier.log",
+                        "$env:TEMP\glazier_gui_error.log",
                         "$env:TEMP\glazier_stdout.log",
                         "$env:TEMP\glazier_stderr.log",
                         "$env:TEMP\update_modules.log",
@@ -878,30 +915,10 @@ function Start-GlazierDeploymentGUI {
         # Header Panel
         $panelHeader = New-Object System.Windows.Forms.Panel
         $panelHeader.Location = New-Object System.Drawing.Point(20, 16)
-        $panelHeader.Size = New-Object System.Drawing.Size($formW - 40, 108)
+        $panelHeader.Size = New-Object System.Drawing.Size(($formW - 40), 108)
         $panelHeader.BackColor = [System.Drawing.Color]::FromArgb(255, 255, 255)
         $panelHeader.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
         $form.Controls.Add($panelHeader)
-
-        $bgForm = $null
-        if (-not $isWinPE) {
-            $bgImgPath = if (Test-Path "$env:TEMP\winpe_cropped.jpg") { "$env:TEMP\winpe_cropped.jpg" } else { "C:\glazier-resources\winpe.jpg" }
-            if (Test-Path $bgImgPath) {
-                $bgForm = New-Object System.Windows.Forms.Form
-                $bgForm.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
-                $bgForm.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
-                $bgForm.Bounds = $screen
-                $bgForm.BackColor = [System.Drawing.Color]::FromArgb(2, 66, 43)
-                $bgForm.ShowInTaskbar = $false
-                $bgForm.TopMost = $false
-                try {
-                    $bgForm.BackgroundImage = [System.Drawing.Image]::FromFile($bgImgPath)
-                    $bgForm.BackgroundImageLayout = [System.Windows.Forms.ImageLayout]::Stretch
-                } catch {}
-                $bgForm.Show()
-                $form.Owner = $bgForm
-            }
-        }
 
         # Status Badge
         $lblBadge = New-Object System.Windows.Forms.Label
@@ -917,7 +934,7 @@ function Start-GlazierDeploymentGUI {
         # Header Title
         $lblTitle = New-Object System.Windows.Forms.Label
         $lblTitle.Location = New-Object System.Drawing.Point(82, 12)
-        $lblTitle.Size = New-Object System.Drawing.Size($formW - 140, 28)
+        $lblTitle.Size = New-Object System.Drawing.Size(($formW - 140), 28)
         $phaseHeader = if ($isWinPE) { "Installing Windows ($GlazierSpecOS) - Phase 1: WinPE Deployment" } else { "Finalizing Installation ($GlazierSpecOS) - Phase 2: Windows Setup" }
         $lblTitle.Text = $phaseHeader
         $lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 20, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
@@ -927,7 +944,7 @@ function Start-GlazierDeploymentGUI {
         # Dynamic Stage Subtitle
         $lblStage = New-Object System.Windows.Forms.Label
         $lblStage.Location = New-Object System.Drawing.Point(82, 42)
-        $lblStage.Size = New-Object System.Drawing.Size($formW - 140, 24)
+        $lblStage.Size = New-Object System.Drawing.Size(($formW - 140), 24)
         $lblStage.Text = "Starting Glazier provisioning engine..."
         $lblStage.Font = New-Object System.Drawing.Font("Segoe UI", 13, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
         $lblStage.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
@@ -967,7 +984,7 @@ function Start-GlazierDeploymentGUI {
         # Terminal Header Panel
         $panelTermHeader = New-Object System.Windows.Forms.Panel
         $panelTermHeader.Location = New-Object System.Drawing.Point(20, 136)
-        $panelTermHeader.Size = New-Object System.Drawing.Size($formW - 40, 36)
+        $panelTermHeader.Size = New-Object System.Drawing.Size(($formW - 40), 36)
         $panelTermHeader.BackColor = [System.Drawing.Color]::FromArgb(22, 30, 46)
         $form.Controls.Add($panelTermHeader)
 
@@ -983,7 +1000,7 @@ function Start-GlazierDeploymentGUI {
         $chkAutoScroll = New-Object System.Windows.Forms.CheckBox
         $chkAutoScroll.Text = "Auto-scroll"
         $chkAutoScroll.Checked = $true
-        $chkAutoScroll.Location = New-Object System.Drawing.Point($panelTermHeader.Width - 445, 6)
+        $chkAutoScroll.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 445), 6)
         $chkAutoScroll.Size = New-Object System.Drawing.Size(100, 24)
         $chkAutoScroll.ForeColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
         $chkAutoScroll.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
@@ -992,7 +1009,7 @@ function Start-GlazierDeploymentGUI {
         # Open Shell / Terminal button (always present and clickable)
         $btnTerminal = New-Object System.Windows.Forms.Button
         $btnTerminal.Text = "Open Shell"
-        $btnTerminal.Location = New-Object System.Drawing.Point($panelTermHeader.Width - 335, 4)
+        $btnTerminal.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 335), 4)
         $btnTerminal.Size = New-Object System.Drawing.Size(105, 28)
         $btnTerminal.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
         $btnTerminal.BackColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
@@ -1004,7 +1021,7 @@ function Start-GlazierDeploymentGUI {
         # Save Logs button (always present, highlighted on failure)
         $btnSaveLogs = New-Object System.Windows.Forms.Button
         $btnSaveLogs.Text = "Save Logs..."
-        $btnSaveLogs.Location = New-Object System.Drawing.Point($panelTermHeader.Width - 220, 4)
+        $btnSaveLogs.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 220), 4)
         $btnSaveLogs.Size = New-Object System.Drawing.Size(105, 28)
         $btnSaveLogs.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
         $btnSaveLogs.BackColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
@@ -1016,7 +1033,7 @@ function Start-GlazierDeploymentGUI {
         # Reboot PC button (hidden initially, shown on failure)
         $btnReboot = New-Object System.Windows.Forms.Button
         $btnReboot.Text = "Reboot PC"
-        $btnReboot.Location = New-Object System.Drawing.Point($panelTermHeader.Width - 105, 4)
+        $btnReboot.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 105), 4)
         $btnReboot.Size = New-Object System.Drawing.Size(95, 28)
         $btnReboot.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
         $btnReboot.BackColor = [System.Drawing.Color]::FromArgb(185, 28, 28)
@@ -1025,9 +1042,10 @@ function Start-GlazierDeploymentGUI {
         $btnReboot.Visible = $false
         $btnReboot.Add_Click({
             if ($bgForm -and -not $bgForm.IsDisposed) {
-                $bgForm.Close()
-                $bgForm.Dispose()
+                try { $bgForm.Close(); $bgForm.Dispose() } catch {}
             }
+            $bgForm = $null
+            try { [void][Win32WindowHelper]::SetThreadExecutionState(0x80000000) } catch {}
             if ($isWinPE) {
                 & "$env:SystemRoot\System32\wpeutil.exe" reboot
             } else {
@@ -1040,14 +1058,14 @@ function Start-GlazierDeploymentGUI {
         # Terminal Body Container Panel
         $panelTermBody = New-Object System.Windows.Forms.Panel
         $panelTermBody.Location = New-Object System.Drawing.Point(20, 172)
-        $panelTermBody.Size = New-Object System.Drawing.Size($formW - 40, $formH - 192)
+        $panelTermBody.Size = New-Object System.Drawing.Size(($formW - 40), ($formH - 192))
         $panelTermBody.BackColor = [System.Drawing.Color]::FromArgb(12, 18, 30)
         $form.Controls.Add($panelTermBody)
 
         # Inner Terminal TextBox
         $txtOutput = New-Object System.Windows.Forms.TextBox
         $txtOutput.Location = New-Object System.Drawing.Point(10, 8)
-        $txtOutput.Size = New-Object System.Drawing.Size($panelTermBody.Width - 20, $panelTermBody.Height - 16)
+        $txtOutput.Size = New-Object System.Drawing.Size(($panelTermBody.Width - 20), ($panelTermBody.Height - 16))
         $txtOutput.BorderStyle = [System.Windows.Forms.BorderStyle]::None
         $txtOutput.BackColor = [System.Drawing.Color]::FromArgb(12, 18, 30)
         $txtOutput.ForeColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
@@ -1065,9 +1083,42 @@ function Start-GlazierDeploymentGUI {
                     [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 6) # SW_MINIMIZE
                 }
             } catch {}
+            $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
             $form.Activate()
             $form.BringToFront()
         })
+
+        if (-not $isWinPE) {
+            $bgImgPath = if (Test-Path "$env:TEMP\winpe_cropped.jpg") { "$env:TEMP\winpe_cropped.jpg" } else { "C:\glazier-resources\winpe.jpg" }
+            if (Test-Path $bgImgPath) {
+                $bgForm = New-Object System.Windows.Forms.Form
+                $bgForm.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+                $bgForm.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+                $bgForm.Bounds = $screen
+                $bgForm.BackColor = [System.Drawing.Color]::FromArgb(2, 66, 43)
+                $bgForm.ShowInTaskbar = $false
+                $bgForm.TopMost = $false
+                try {
+                    $bgForm.BackgroundImage = [System.Drawing.Image]::FromFile($bgImgPath)
+                    $bgForm.BackgroundImageLayout = [System.Windows.Forms.ImageLayout]::Stretch
+                } catch {}
+
+                $pinBottomAction = {
+                    if ($bgForm -and -not $bgForm.IsDisposed) {
+                        [void][Win32WindowHelper]::SetWindowPos($bgForm.Handle, [Win32WindowHelper]::HWND_BOTTOM, 0, 0, 0, 0, 0x0013)
+                    }
+                }
+                $bgForm.Add_Shown($pinBottomAction)
+                $bgForm.Add_Activated($pinBottomAction)
+                $bgForm.Add_MouseDown($pinBottomAction)
+                $bgForm.Add_Click($pinBottomAction)
+
+                $bgForm.Show()
+                if ($bgForm -and -not $bgForm.IsDisposed) {
+                    [void][Win32WindowHelper]::SetWindowPos($bgForm.Handle, [Win32WindowHelper]::HWND_BOTTOM, 0, 0, 0, 0, 0x0013)
+                }
+            }
+        }
 
         $form.Show()
         [System.Windows.Forms.Application]::DoEvents()
@@ -1183,6 +1234,119 @@ function Start-GlazierDeploymentGUI {
         New-Item -ItemType File -Path $stdoutLog -Force | Out-Null
         New-Item -ItemType File -Path $stderrLog -Force | Out-Null
 
+        # Self-heal X:\glazier-resources\GlazierDeploymentGUI.ps1 in RAM before launching Python
+        if ($isWinPE) {
+            try {
+                if (-not (Test-Path "X:\glazier-resources")) {
+                    New-Item -ItemType Directory -Path "X:\glazier-resources" -Force | Out-Null
+                }
+                $targetGuiPath = "X:\glazier-resources\GlazierDeploymentGUI.ps1"
+                $downloaded = $false
+                $remoteGuiUrl = "$($ConfigServer.TrimEnd('/'))/glazier-resources/GlazierDeploymentGUI.ps1"
+                try {
+                    $wc = New-Object System.Net.WebClient
+                    $wc.DownloadFile($remoteGuiUrl, $targetGuiPath)
+                    if ((Test-Path $targetGuiPath) -and (Get-Item $targetGuiPath).Length -gt 0) {
+                        $dlContent = Get-Content -Path $targetGuiPath -Raw -ErrorAction SilentlyContinue
+                        if ($dlContent -and $dlContent -match 'Start-GlazierDeploymentGUI') {
+                            $downloaded = $true
+                        }
+                    }
+                } catch {
+                    $downloaded = $false
+                }
+
+                if (-not $downloaded) {
+                    $win32TypeDefCode = @'
+Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
+
+$win32HelperTypeDef = @"
+using System;
+using System.Runtime.InteropServices;
+
+public class Win32WindowHelper {
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetConsoleWindow();
+
+    [DllImport("gdi32.dll", CharSet = CharSet.Auto)]
+    public static extern int AddFontResource(string lpFileName);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+    public static readonly IntPtr HWND_BOTTOM = new IntPtr(1);
+    public const uint SWP_NOSIZE = 0x0001;
+    public const uint SWP_NOMOVE = 0x0002;
+    public const uint SWP_NOACTIVATE = 0x0010;
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    public static extern uint SetThreadExecutionState(uint esFlags);
+
+    public const uint ES_CONTINUOUS = 0x80000000;
+    public const uint ES_SYSTEM_REQUIRED = 0x00000001;
+    public const uint ES_DISPLAY_REQUIRED = 0x00000002;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr GetStdHandle(int nStdHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+
+    public const int STD_INPUT_HANDLE = -10;
+    public const uint ENABLE_QUICK_EDIT_MODE = 0x0040;
+    public const uint ENABLE_EXTENDED_FLAGS = 0x0080;
+
+    public static void DisableQuickEdit() {
+        try {
+            IntPtr hStdin = GetStdHandle(STD_INPUT_HANDLE);
+            uint mode;
+            if (GetConsoleMode(hStdin, out mode)) {
+                mode &= ~ENABLE_QUICK_EDIT_MODE;
+                mode |= ENABLE_EXTENDED_FLAGS;
+                SetConsoleMode(hStdin, mode);
+            }
+        } catch {}
+    }
+}
+"@
+
+if (-not ('Win32WindowHelper' -as [type])) {
+    Add-Type -TypeDefinition $win32HelperTypeDef -ErrorAction SilentlyContinue
+}
+'@
+                    $guiContent = @(
+                        "# GlazierDeploymentGUI.ps1 - Runtime Self-Healed Deployment GUI",
+                        $win32TypeDefCode,
+                        "",
+                        "function Test-WinPENetwork {",
+                        ${function:Test-WinPENetwork},
+                        "}",
+                        "",
+                        "function Get-GlazierLiveProgress {",
+                        ${function:Get-GlazierLiveProgress},
+                        "}",
+                        "",
+                        "function Start-GlazierDeploymentGUI {",
+                        ${function:Start-GlazierDeploymentGUI},
+                        "}"
+                    ) -join "`r`n"
+                    Set-Content -Path $targetGuiPath -Value $guiContent -Encoding UTF8 -Force
+                }
+            } catch {
+                Write-Host "Warning: Could not self-heal X:\glazier-resources\GlazierDeploymentGUI.ps1: $_" -ForegroundColor Yellow
+            }
+        }
+
         $env:PYTHONUNBUFFERED = "1"
         $pyArgs = @("-u", $GlazierScript, "--config_server=$ConfigServer", "--resource_path=$ResourcePath", "--glazier_spec_os=$GlazierSpecOS", "--preserve_tasks=true")
         if (-not [string]::IsNullOrWhiteSpace($ConfigRootPath)) {
@@ -1213,6 +1377,10 @@ function Start-GlazierDeploymentGUI {
 
         try {
             while (-not $proc.HasExited) {
+                try { [void][Win32WindowHelper]::SetThreadExecutionState(0x80000003) } catch {}
+                if ($bgForm -and -not $bgForm.IsDisposed) {
+                    [void][Win32WindowHelper]::SetWindowPos($bgForm.Handle, [Win32WindowHelper]::HWND_BOTTOM, 0, 0, 0, 0, 0x0013)
+                }
                 $hasNewText = $false
 
                 $pulseIdx = ($pulseIdx + 1) % $pulseFrames.Length
@@ -1328,12 +1496,15 @@ function Start-GlazierDeploymentGUI {
                 Start-Sleep -Milliseconds 100
             }
             if ($bgForm -and -not $bgForm.IsDisposed) {
-                $bgForm.Close()
-                $bgForm.Dispose()
+                try { $bgForm.Close(); $bgForm.Dispose() } catch {}
             }
-            $form.Close()
-            $form.Dispose()
+            $bgForm = $null
+            if ($form -and -not $form.IsDisposed) {
+                try { $form.Close(); $form.Dispose() } catch {}
+            }
+            $form = $null
             try { $script:glazierMutex.ReleaseMutex() } catch {}
+            try { [void][Win32WindowHelper]::SetThreadExecutionState(0x80000000) } catch {}
             [Environment]::Exit(0)
         } else {
             $panelHeader.BackColor = [System.Drawing.Color]::FromArgb(254, 226, 226)
@@ -1360,12 +1531,53 @@ function Start-GlazierDeploymentGUI {
                 Start-Sleep -Milliseconds 100
             }
             if ($bgForm -and -not $bgForm.IsDisposed) {
-                $bgForm.Close()
-                $bgForm.Dispose()
+                try { $bgForm.Close(); $bgForm.Dispose() } catch {}
             }
+            $bgForm = $null
             try { $script:glazierMutex.ReleaseMutex() } catch {}
+            try { [void][Win32WindowHelper]::SetThreadExecutionState(0x80000000) } catch {}
         }
     } catch {
+        if ($bgForm -and -not $bgForm.IsDisposed) {
+            try { $bgForm.Close(); $bgForm.Dispose() } catch {}
+        }
+        $bgForm = $null
+        if ($form -and -not $form.IsDisposed) {
+            try { $form.Close(); $form.Dispose() } catch {}
+        }
+        $form = $null
+
+        try {
+            $errDetails = @(
+                "================================================================================",
+                "GLAZIER DEPLOYMENT GUI RUNTIME EXCEPTION - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
+                "================================================================================",
+                ($_ | Out-String),
+                $_.InvocationInfo.PositionMessage
+            ) -join "`r`n"
+            Set-Content -Path "$env:TEMP\glazier_gui_error.log" -Value $errDetails -Encoding UTF8 -Force
+        } catch {}
+
+        try {
+            if ($script:glazierMutex) {
+                $script:glazierMutex.ReleaseMutex()
+            }
+        } catch {}
+
+        try {
+            if ($consoleHwnd -ne [IntPtr]::Zero) {
+                [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 9) # SW_RESTORE
+                Start-Sleep -Milliseconds 50
+                [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 3) # SW_MAXIMIZE
+            }
+            [Win32WindowHelper]::DisableQuickEdit()
+        } catch {}
+
+        # Ensure wake lock is active during fallback CLI execution
+        try {
+            [void][Win32WindowHelper]::SetThreadExecutionState(0x80000003)
+        } catch {}
+
         Write-Host "Warning: Glazier Deployment GUI error: $_" -ForegroundColor Yellow
         # Fallback to direct CLI execution if GUI threw
         $env:PYTHONUNBUFFERED = "1"
@@ -1374,6 +1586,8 @@ function Start-GlazierDeploymentGUI {
             $pyArgs += "--config_root_path=$ConfigRootPath"
         }
         & $PythonExe $pyArgs
+        try { [void][Win32WindowHelper]::SetThreadExecutionState(0x80000000) } catch {}
+    }
     }
 }
 

@@ -20,6 +20,18 @@ $env:PYTHONPATH = "$rootDrive\glazier\"
 $env:SSL_CERT_FILE = "$rootDrive\glazier-resources\ca-certs.crt"
 Write-Output "Starting Glazier imaging process ($glazier_spec_os)..."
 
+if ($isWinPE) {
+    try {
+        $remoteGuiUrl = "$($config_server.TrimEnd('/'))/glazier-resources/GlazierDeploymentGUI.ps1"
+        $targetGuiPath = "X:\glazier-resources\GlazierDeploymentGUI.ps1"
+        if (-not (Test-Path "X:\glazier-resources")) {
+            New-Item -ItemType Directory -Path "X:\glazier-resources" -Force | Out-Null
+        }
+        $wc = New-Object System.Net.WebClient
+        $wc.DownloadFile($remoteGuiUrl, $targetGuiPath)
+    } catch {}
+}
+
 $guiCandidates = @(
     "$rootDrive\glazier-resources\GlazierDeploymentGUI.ps1",
     "X:\glazier-resources\GlazierDeploymentGUI.ps1",

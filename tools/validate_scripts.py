@@ -6,7 +6,8 @@ Checks:
   2. No invalid PowerShell scope references ($var: where var is not a known scope).
   3. No corrupted assignments or ASCII bell characters (\x07) from unescaped heredocs.
   4. Balanced here-strings (@"..."@ and @'...'@).
-  5. Python syntax compilation (py_compile) across all .py files.
+  5. No unparenthesized arithmetic (+ or -) in New-Object argument lists.
+  6. Python syntax compilation (py_compile) across all .py files.
 """
 
 import os
@@ -85,6 +86,15 @@ def check_ascii_and_powershell(root_dir='.'):
               errors.append(
                   f'{relpath}:{idx}: Invalid scope prefix "${m.group(1)}:" in: {line.strip()}'
               )
+
+          # Check for unparenthesized binary + or - arithmetic inside New-Object ...(...) argument lists
+          if re.search(
+              r'New-Object\s+[A-Za-z0-9_.]+\s*\([^)]*\$[A-Za-z0-9_.:]+\s+[-+]\s+[^,)]+,',
+              line,
+          ):
+            errors.append(
+                f'{relpath}:{idx}: Unparenthesized arithmetic inside New-Object arguments in: {line.strip()}'
+            )
 
         # Check here-strings balance (PowerShell requires @' / @" at end of line, and closing '@ / "@ at start of line)
         hs_double_open = len(re.findall(r'@"\s*\r?\n', text))
