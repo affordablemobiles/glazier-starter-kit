@@ -544,7 +544,7 @@ function Start-GlazierDeploymentGUI {
                     [System.Windows.Forms.MessageBoxIcon]::Error
                 )
             } finally {
-                $form.TopMost = $true
+                $form.TopMost = $isWinPE
             }
         }
 
@@ -852,7 +852,7 @@ function Start-GlazierDeploymentGUI {
                         $form.TopMost = $false
                         [System.Windows.Forms.Application]::DoEvents()
                         Start-Process -FilePath $wcExe -Wait
-                        $form.TopMost = $true
+                        $form.TopMost = $isWinPE
                         [System.Windows.Forms.Application]::DoEvents()
                         for ($wSec = 1; $wSec -le 10; $wSec++) {
                             $netOk = Test-WinPENetwork
@@ -1056,6 +1056,7 @@ function Start-GlazierDeploymentGUI {
 
             # Keep window open until technician closes or reboots
             while (-not $form.IsDisposed) {
+                try { [void][Win32WindowHelper]::SetThreadExecutionState(0x80000003) } catch {}
                 [System.Windows.Forms.Application]::DoEvents()
                 Start-Sleep -Milliseconds 100
             }

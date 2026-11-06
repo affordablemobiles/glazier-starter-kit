@@ -10,6 +10,33 @@ $env:PYTHONPATH = "$rootDrive\glazier\"
 $env:SSL_CERT_FILE = "$rootDrive\glazier-resources\ca-certs.crt"
 Write-Output "Starting Glazier imaging process ($glazier_spec_os)..."
 
+try {
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072 -bor 12288
+    } catch {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    }
+    $remoteGuiUrl = "$($config_server.TrimEnd('/'))/glazier-resources/GlazierDeploymentGUI.ps1"
+    $targetGuiDir = "$rootDrive\glazier-resources"
+    $targetGuiPath = "$targetGuiDir\GlazierDeploymentGUI.ps1"
+    $tmpGuiPath = "$env:TEMP\GlazierDeploymentGUI.ps1.tmp"
+    if (Test-Path $tmpGuiPath) { Remove-Item $tmpGuiPath -Force -ErrorAction SilentlyContinue }
+    if (-not (Test-Path $targetGuiDir)) {
+        New-Item -ItemType Directory -Path $targetGuiDir -Force | Out-Null
+    }
+    $wc = New-Object System.Net.WebClient
+    $wc.DownloadFile($remoteGuiUrl, $tmpGuiPath)
+    if ((Test-Path $tmpGuiPath) -and (Get-Item $tmpGuiPath).Length -gt 1024) {
+        $content = Get-Content -Path $tmpGuiPath -Raw -ErrorAction SilentlyContinue
+        if ($content -and $content -match 'Start-GlazierDeploymentGUI') {
+            Move-Item -Path $tmpGuiPath -Destination $targetGuiPath -Force
+        }
+    }
+} catch {
+} finally {
+    if (Test-Path $tmpGuiPath) { Remove-Item $tmpGuiPath -Force -ErrorAction SilentlyContinue }
+}
+
 $guiCandidates = @(
     "$rootDrive\glazier-resources\GlazierDeploymentGUI.ps1",
     "C:\glazier-resources\GlazierDeploymentGUI.ps1",

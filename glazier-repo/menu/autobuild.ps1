@@ -372,6 +372,7 @@ function Show-GlazierProfileGUI {
             $lblTimer.Text = "Auto-starting '$($script:selectedProfile)' in $($script:remainingSeconds) seconds..."
             $btnStart.Text = "Start Imaging ($($script:remainingSeconds)s)"
             $timer.Add_Tick({
+                try { [void][Win32WindowHelper]::SetThreadExecutionState(0x80000003) } catch {}
                 $script:remainingSeconds--
                 if ($script:remainingSeconds -le 0) {
                     $timer.Stop()
@@ -902,7 +903,7 @@ function Start-GlazierDeploymentGUI {
                     [System.Windows.Forms.MessageBoxIcon]::Error
                 )
             } finally {
-                $form.TopMost = $true
+                $form.TopMost = $isWinPE
             }
         }
 
@@ -1210,7 +1211,7 @@ function Start-GlazierDeploymentGUI {
                         $form.TopMost = $false
                         [System.Windows.Forms.Application]::DoEvents()
                         Start-Process -FilePath $wcExe -Wait
-                        $form.TopMost = $true
+                        $form.TopMost = $isWinPE
                         [System.Windows.Forms.Application]::DoEvents()
                         for ($wSec = 1; $wSec -le 10; $wSec++) {
                             $netOk = Test-WinPENetwork
@@ -1243,17 +1244,27 @@ function Start-GlazierDeploymentGUI {
                 $targetGuiPath = "X:\glazier-resources\GlazierDeploymentGUI.ps1"
                 $downloaded = $false
                 $remoteGuiUrl = "$($ConfigServer.TrimEnd('/'))/glazier-resources/GlazierDeploymentGUI.ps1"
+                $tmpGuiPath = "$env:TEMP\GlazierDeploymentGUI.ps1.tmp"
                 try {
+                    try {
+                        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072 -bor 12288
+                    } catch {
+                        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                    }
+                    if (Test-Path $tmpGuiPath) { Remove-Item $tmpGuiPath -Force -ErrorAction SilentlyContinue }
                     $wc = New-Object System.Net.WebClient
-                    $wc.DownloadFile($remoteGuiUrl, $targetGuiPath)
-                    if ((Test-Path $targetGuiPath) -and (Get-Item $targetGuiPath).Length -gt 0) {
-                        $dlContent = Get-Content -Path $targetGuiPath -Raw -ErrorAction SilentlyContinue
+                    $wc.DownloadFile($remoteGuiUrl, $tmpGuiPath)
+                    if ((Test-Path $tmpGuiPath) -and (Get-Item $tmpGuiPath).Length -gt 1024) {
+                        $dlContent = Get-Content -Path $tmpGuiPath -Raw -ErrorAction SilentlyContinue
                         if ($dlContent -and $dlContent -match 'Start-GlazierDeploymentGUI') {
+                            Move-Item -Path $tmpGuiPath -Destination $targetGuiPath -Force
                             $downloaded = $true
                         }
                     }
                 } catch {
                     $downloaded = $false
+                } finally {
+                    if (Test-Path $tmpGuiPath) { Remove-Item $tmpGuiPath -Force -ErrorAction SilentlyContinue }
                 }
 
                 if (-not $downloaded) {
@@ -1276,7 +1287,7 @@ public class Win32WindowHelper {
     public static extern int AddFontResource(string lpFileName);
 
     [DllImport("user32.dll")]
-    public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
@@ -1527,6 +1538,7 @@ if (-not ('Win32WindowHelper' -as [type])) {
 
             # Keep window open until technician closes or reboots
             while (-not $form.IsDisposed) {
+                try { [void][Win32WindowHelper]::SetThreadExecutionState(0x80000003) } catch {}
                 [System.Windows.Forms.Application]::DoEvents()
                 Start-Sleep -Milliseconds 100
             }
@@ -1587,7 +1599,6 @@ if (-not ('Win32WindowHelper' -as [type])) {
         }
         & $PythonExe $pyArgs
         try { [void][Win32WindowHelper]::SetThreadExecutionState(0x80000000) } catch {}
-    }
     }
 }
 
