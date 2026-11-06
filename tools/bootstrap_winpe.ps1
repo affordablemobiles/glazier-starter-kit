@@ -988,10 +988,15 @@ try {
     [void][Win32Window]::SetThreadExecutionState(0x80000003)
 } catch {}
 
-# Minimize (DO NOT Hide) Parent Console immediately so Startnet.cmd disappears to the taskbar within ~1 second
+# Hide Parent Console immediately so Startnet.cmd disappears completely (no gray titlebar stubs)
 $consoleHwnd = [Win32Window]::GetConsoleWindow()
 if ($consoleHwnd -ne [IntPtr]::Zero) {
-    [void][Win32Window]::ShowWindow($consoleHwnd, 6) # SW_MINIMIZE
+    [void][Win32Window]::ShowWindow($consoleHwnd, 0) # SW_HIDE
+}
+Get-Process -Name cmd -ErrorAction SilentlyContinue | ForEach-Object {
+    if ($_.MainWindowHandle -ne [IntPtr]::Zero) {
+        [void][Win32Window]::ShowWindow($_.MainWindowHandle, 0) # SW_HIDE
+    }
 }
 
 # Ensure core fonts are loaded into the live GDI session
@@ -1191,6 +1196,14 @@ function Set-Step {
 }
 
 try {
+    if ($consoleHwnd -ne [IntPtr]::Zero) {
+        [void][Win32Window]::ShowWindow($consoleHwnd, 0) # SW_HIDE
+    }
+    Get-Process -Name cmd -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.MainWindowHandle -ne [IntPtr]::Zero) {
+            [void][Win32Window]::ShowWindow($_.MainWindowHandle, 0) # SW_HIDE
+        }
+    }
     $form.Show()
     [System.Windows.Forms.Application]::DoEvents()
 
@@ -1437,6 +1450,20 @@ try {
     }
 } catch {
     Write-Host "Warning: Glazier WinPE initialization encountered an error: $_" -ForegroundColor Yellow
+    try {
+        if ($consoleHwnd -ne [IntPtr]::Zero) {
+            [void][Win32Window]::ShowWindow($consoleHwnd, 5) # SW_SHOW
+            [void][Win32Window]::ShowWindow($consoleHwnd, 9) # SW_RESTORE
+            Start-Sleep -Milliseconds 50
+            [void][Win32Window]::ShowWindow($consoleHwnd, 3) # SW_MAXIMIZE
+        }
+        Get-Process -Name cmd -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.MainWindowHandle -ne [IntPtr]::Zero) {
+                [void][Win32Window]::ShowWindow($_.MainWindowHandle, 5) # SW_SHOW
+                [void][Win32Window]::ShowWindow($_.MainWindowHandle, 9) # SW_RESTORE
+            }
+        }
+    } catch {}
 } finally {
     if ($form -and -not $form.IsDisposed) {
         $form.Close()

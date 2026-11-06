@@ -181,7 +181,20 @@ function Get-GlazierLiveProgress {
     }
 
     # Check for sub-task percentage in CurrentLogChunk (e.g. "45%", "14.2%", "(40%)", "[=== 35.0% ===]")
-    if ($CurrentLogChunk -match '(?<![0-9.])(\d{1,3}(?:\.\d+)?)\s*%') {
+    $curlDesc = $null
+    if ($CurrentLogChunk -match '(?:execute\.py:\d+\]|\s)\s*(\d{1,3})\s+([0-9.]+[kKMGT]i?B?)\s+\d+\s+([0-9.]+[kKMGT]i?B?|0)\s+.*?\s+([0-9.]+[kKMGT]i?B?(?:/s)?|0)\s*$') {
+        try {
+            $parsedCurlPct = [int]$matches[1]
+            if ($parsedCurlPct -ge 0 -and $parsedCurlPct -le 100) {
+                $script:subTaskPct = $parsedCurlPct
+            }
+            $tot = $matches[2]
+            $rec = $matches[3]
+            $spdRaw = $matches[4]
+            $spd = if ($spdRaw -eq '0') { '0 KB/s' } elseif ($spdRaw -match '/s$') { $spdRaw } else { "$spdRaw/s" }
+            $curlDesc = "Downloading Windows OS image ($($script:subTaskPct)% - $rec / $tot @ $spd)..."
+        } catch {}
+    } elseif ($CurrentLogChunk -match '(?<![0-9.])(\d{1,3}(?:\.\d+)?)\s*%') {
         try {
             $parsedSubPct = [double]$matches[1]
             if ($parsedSubPct -ge 0 -and $parsedSubPct -le 100) {
@@ -197,7 +210,9 @@ function Get-GlazierLiveProgress {
 
     # Check friendly hints from body first
     $desc = $null
-    if ($body -match 'Start-OSDCloud') {
+    if ($curlDesc) {
+        $desc = $curlDesc
+    } elseif ($body -match 'Start-OSDCloud') {
         $desc = "Installing Windows OS image and hardware drivers (OSDCloud)..."
     } elseif ($body -match 'bcdboot') {
         $desc = "Configuring Windows UEFI Boot Manager..."
@@ -365,7 +380,12 @@ function Start-GlazierDeploymentGUI {
     try {
         $consoleHwnd = [Win32WindowHelper]::GetConsoleWindow()
         if ($consoleHwnd -ne [IntPtr]::Zero) {
-            [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 6) # SW_MINIMIZE
+            [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 0) # SW_HIDE
+        }
+        Get-Process -Name cmd -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.MainWindowHandle -ne [IntPtr]::Zero) {
+                [void][Win32WindowHelper]::ShowWindow($_.MainWindowHandle, 0) # SW_HIDE
+            }
         }
     } catch {}
 
@@ -411,7 +431,7 @@ function Start-GlazierDeploymentGUI {
         $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
         $marginX = [Math]::Max(32, [int]($screen.Width * 0.03125)) # 60px on 1920
         $topY    = [Math]::Max(16, [int]($screen.Height * 0.022))   # 24px on 1080
-        $bottomClearance = [Math]::Max(140, [int]($screen.Height * 0.182)) # ~196px on 1080 (leaves clean gap above logo at Y=912)
+        $bottomClearance = [Math]::Max(220, [int]($screen.Height * 0.245)) # ~265px on 1080 (clears AO logo completely)
         $formW = [Math]::Max(860, $screen.Width - ($marginX * 2))
         $formH = [Math]::Max(520, $screen.Height - $topY - $bottomClearance)
 
@@ -423,6 +443,7 @@ function Start-GlazierDeploymentGUI {
         $form.Location = New-Object System.Drawing.Point($marginX, $topY)
         $form.ClientSize = New-Object System.Drawing.Size($formW, $formH)
         $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+        $form.ControlBox = $false
         $form.MaximizeBox = $false
         $form.MinimizeBox = $false
         $form.TopMost = $isWinPE
@@ -576,12 +597,23 @@ function Start-GlazierDeploymentGUI {
         # Header Title
         $lblTitle = New-Object System.Windows.Forms.Label
         $lblTitle.Location = New-Object System.Drawing.Point(82, 12)
-        $lblTitle.Size = New-Object System.Drawing.Size(($formW - 140), 28)
+        $lblTitle.Size = New-Object System.Drawing.Size(($formW - 220), 28)
+        $lblTitle.AutoEllipsis = $true
         $phaseHeader = if ($isWinPE) { "Installing Windows ($GlazierSpecOS) - Phase 1: WinPE Deployment" } else { "Finalizing Installation ($GlazierSpecOS) - Phase 2: Windows Setup" }
         $lblTitle.Text = $phaseHeader
         $lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 20, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
         $lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
         $panelHeader.Controls.Add($lblTitle)
+
+        # Percentage Readout Label
+        $lblPercent = New-Object System.Windows.Forms.Label
+        $lblPercent.Location = New-Object System.Drawing.Point(($panelHeader.Width - 90), 14)
+        $lblPercent.Size = New-Object System.Drawing.Size(74, 28)
+        $lblPercent.Text = "6%"
+        $lblPercent.TextAlign = [System.Drawing.ContentAlignment]::TopRight
+        $lblPercent.Font = New-Object System.Drawing.Font("Segoe UI", 18, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
+        $lblPercent.ForeColor = [System.Drawing.Color]::FromArgb(0, 120, 212)
+        $panelHeader.Controls.Add($lblPercent)
 
         # Dynamic Stage Subtitle
         $lblStage = New-Object System.Windows.Forms.Label
@@ -642,7 +674,7 @@ function Start-GlazierDeploymentGUI {
         $chkAutoScroll = New-Object System.Windows.Forms.CheckBox
         $chkAutoScroll.Text = "Auto-scroll"
         $chkAutoScroll.Checked = $true
-        $chkAutoScroll.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 445), 6)
+        $chkAutoScroll.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 340), 6)
         $chkAutoScroll.Size = New-Object System.Drawing.Size(100, 24)
         $chkAutoScroll.ForeColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
         $chkAutoScroll.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
@@ -651,9 +683,12 @@ function Start-GlazierDeploymentGUI {
         # Open Shell / Terminal button (always present and clickable)
         $btnTerminal = New-Object System.Windows.Forms.Button
         $btnTerminal.Text = "Open Shell"
-        $btnTerminal.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 335), 4)
+        $btnTerminal.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 230), 4)
         $btnTerminal.Size = New-Object System.Drawing.Size(105, 28)
+        $btnTerminal.UseVisualStyleBackColor = $false
         $btnTerminal.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+        $btnTerminal.FlatAppearance.BorderSize = 1
+        $btnTerminal.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(71, 85, 105)
         $btnTerminal.BackColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
         $btnTerminal.ForeColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
         $btnTerminal.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
@@ -663,9 +698,12 @@ function Start-GlazierDeploymentGUI {
         # Save Logs button (always present, highlighted on failure)
         $btnSaveLogs = New-Object System.Windows.Forms.Button
         $btnSaveLogs.Text = "Save Logs..."
-        $btnSaveLogs.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 220), 4)
+        $btnSaveLogs.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 115), 4)
         $btnSaveLogs.Size = New-Object System.Drawing.Size(105, 28)
+        $btnSaveLogs.UseVisualStyleBackColor = $false
         $btnSaveLogs.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+        $btnSaveLogs.FlatAppearance.BorderSize = 1
+        $btnSaveLogs.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(71, 85, 105)
         $btnSaveLogs.BackColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
         $btnSaveLogs.ForeColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
         $btnSaveLogs.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
@@ -677,7 +715,10 @@ function Start-GlazierDeploymentGUI {
         $btnReboot.Text = "Reboot PC"
         $btnReboot.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 105), 4)
         $btnReboot.Size = New-Object System.Drawing.Size(95, 28)
+        $btnReboot.UseVisualStyleBackColor = $false
         $btnReboot.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+        $btnReboot.FlatAppearance.BorderSize = 1
+        $btnReboot.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(71, 85, 105)
         $btnReboot.BackColor = [System.Drawing.Color]::FromArgb(185, 28, 28)
         $btnReboot.ForeColor = [System.Drawing.Color]::White
         $btnReboot.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
@@ -707,7 +748,7 @@ function Start-GlazierDeploymentGUI {
         # Inner Terminal TextBox
         $txtOutput = New-Object System.Windows.Forms.TextBox
         $txtOutput.Location = New-Object System.Drawing.Point(10, 8)
-        $txtOutput.Size = New-Object System.Drawing.Size(($panelTermBody.Width - 20), ($panelTermBody.Height - 16))
+        $txtOutput.Size = New-Object System.Drawing.Size(($panelTermBody.Width - 12), ($panelTermBody.Height - 16))
         $txtOutput.BorderStyle = [System.Windows.Forms.BorderStyle]::None
         $txtOutput.BackColor = [System.Drawing.Color]::FromArgb(12, 18, 30)
         $txtOutput.ForeColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
@@ -715,14 +756,19 @@ function Start-GlazierDeploymentGUI {
         $txtOutput.Multiline = $true
         $txtOutput.ReadOnly = $true
         $txtOutput.HideSelection = $true
-        $txtOutput.WordWrap = $false
-        $txtOutput.ScrollBars = [System.Windows.Forms.ScrollBars]::Both
+        $txtOutput.WordWrap = $true
+        $txtOutput.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
         $panelTermBody.Controls.Add($txtOutput)
 
         $form.Add_Shown({
             try {
                 if ($consoleHwnd -ne [IntPtr]::Zero) {
-                    [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 6) # SW_MINIMIZE
+                    [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 0) # SW_HIDE
+                }
+                Get-Process -Name cmd -ErrorAction SilentlyContinue | ForEach-Object {
+                    if ($_.MainWindowHandle -ne [IntPtr]::Zero) {
+                        [void][Win32WindowHelper]::ShowWindow($_.MainWindowHandle, 0) # SW_HIDE
+                    }
                 }
             } catch {}
             $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
@@ -970,6 +1016,7 @@ function Start-GlazierDeploymentGUI {
                 if ($prog) {
                     $lblStage.Text = $prog
                 }
+                $lblPercent.Text = "$($script:currentOverallPct)%"
 
                 [System.Windows.Forms.Application]::DoEvents()
                 Start-Sleep -Milliseconds 100
@@ -1013,6 +1060,8 @@ function Start-GlazierDeploymentGUI {
             $lblBadge.Text = "[OK]"
             $lblBadge.BackColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
             $lblBadge.ForeColor = [System.Drawing.Color]::White
+            $lblPercent.Text = "100%"
+            $lblPercent.ForeColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
             $lblTitle.Text = "Stage Complete - Rebooting..."
             $lblStage.Text = "Glazier tasks completed successfully. Rebooting system..."
             $progressPulse.Visible = $false
@@ -1040,6 +1089,7 @@ function Start-GlazierDeploymentGUI {
             $lblBadge.Text = "[!]"
             $lblBadge.BackColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
             $lblBadge.ForeColor = [System.Drawing.Color]::White
+            $lblPercent.ForeColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
             $lblTitle.Text = "DEPLOYMENT FAILED (Exit Code: $($proc.ExitCode)) - Please Photograph This Screen"
             if ($script:lastGlazierError) {
                 $lblStage.Text = "$($script:lastGlazierError) | Take a photo of this screen and send to IT Support."
@@ -1051,6 +1101,12 @@ function Start-GlazierDeploymentGUI {
             $progressFill.Size = New-Object System.Drawing.Size($trackW, $trackH)
             $progressFill.BackColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
             $btnSaveLogs.BackColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
+
+            # Shift toolbar buttons left to accommodate $btnReboot on far right
+            $chkAutoScroll.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 445), 6)
+            $btnTerminal.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 335), 4)
+            $btnSaveLogs.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 220), 4)
+            $btnReboot.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 105), 4)
             $btnReboot.Visible = $true
             [void][Win32WindowHelper]::SendMessage($txtOutput.Handle, 0x0115, [IntPtr]7, [IntPtr]::Zero)
 
@@ -1096,9 +1152,16 @@ function Start-GlazierDeploymentGUI {
 
         try {
             if ($consoleHwnd -ne [IntPtr]::Zero) {
+                [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 5) # SW_SHOW
                 [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 9) # SW_RESTORE
                 Start-Sleep -Milliseconds 50
                 [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 3) # SW_MAXIMIZE
+            }
+            Get-Process -Name cmd -ErrorAction SilentlyContinue | ForEach-Object {
+                if ($_.MainWindowHandle -ne [IntPtr]::Zero) {
+                    [void][Win32WindowHelper]::ShowWindow($_.MainWindowHandle, 5) # SW_SHOW
+                    [void][Win32WindowHelper]::ShowWindow($_.MainWindowHandle, 9) # SW_RESTORE
+                }
             }
             [Win32WindowHelper]::DisableQuickEdit()
         } catch {}
