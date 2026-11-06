@@ -340,7 +340,7 @@ if ($enableWinRE) {
                     }
                     break
                 } catch {
-                    Write-Log "Warning: Microsoft Catalog query attempt $cAttempt of $catalogRetries failed for $catalogSearchUrl: $_" -Color Yellow
+                    Write-Log "Warning: Microsoft Catalog query attempt $cAttempt of $catalogRetries failed for ${catalogSearchUrl}: $_" -Color Yellow
                     if ($cAttempt -lt $catalogRetries) {
                         Start-Sleep -Seconds (5 * $cAttempt)
                     }

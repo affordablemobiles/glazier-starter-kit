@@ -1,0 +1,82 @@
+name: Validate Scripts & Configurations
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    paths:
+      - "tools/**"
+      - "glazier-repo/**"
+      - "glazier-resources/**"
+      - ".github/workflows/validate-scripts.yml"
+  pull_request:
+    paths:
+      - "tools/**"
+      - "glazier-repo/**"
+      - "glazier-resources/**"
+      - ".github/workflows/validate-scripts.yml"
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validate PowerShell, ASCII & Python Syntax
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run script encoding & Python syntax checks
+        run: |
+          python3 tools/validate_scripts.py
+
+      - name: Validate PowerShell AST syntax in pwsh
+        shell: pwsh
+        run: |
+          $hasErrors = $false
+          $dirs = @("tools", "glazier-repo", "glazier-resources")
+          $files = Get-ChildItem -Path $dirs -Filter "*.ps1" -Recurse
+
+          Write-Host "Validating $($files.Count) PowerShell files with AST Parser..."
+          foreach ($file in $files) {
+              $tokens = $null
+              $parseErrors = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$parseErrors)
+              if ($parseErrors -and $parseErrors.Count -gt 0) {
+                  $hasErrors = $true
+                  foreach ($err in $parseErrors) {
+                      Write-Host "::error file=$($file.FullName),line=$($err.Extent.StartLineNumber),col=$($err.Extent.StartColumnNumber)::PowerShell Parse Error ($($err.ErrorId)): $($err.Message)"
+                  }
+              }
+          }
+
+          # Validate embedded PowerShell scripts inside tools/bootstrap_winpe.ps1
+          Write-Host "Validating embedded scripts inside tools/bootstrap_winpe.ps1..."
+          $bootstrapContent = Get-Content -Path "tools/bootstrap_winpe.ps1" -Raw
+          $hereStringMatches = [regex]::Matches($bootstrapContent, "(?s)@'(\r?\n.*?\r?\n)'@")
+          $hereIdx = 1
+          foreach ($m in $hereStringMatches) {
+              $embeddedCode = $m.Groups[1].Value
+              $t = $null
+              $errs = $null
+              [void][System.Management.Automation.Language.Parser]::ParseInput($embeddedCode, [ref]$t, [ref]$errs)
+              if ($errs -and $errs.Count -gt 0) {
+                  $hasErrors = $true
+                  foreach ($err in $errs) {
+                      Write-Host "::error file=tools/bootstrap_winpe.ps1,line=$($err.Extent.StartLineNumber),col=$($err.Extent.StartColumnNumber)::Embedded Script $hereIdx Parse Error ($($err.ErrorId)): $($err.Message)"
+                  }
+              }
+              $hereIdx++
+          }
+
+          if ($hasErrors) {
+              Write-Error "PowerShell AST validation failed with errors."
+              exit 1
+          }
+
+          Write-Host "All $($files.Count) PowerShell scripts and $($hereStringMatches.Count) embedded scripts parsed with 0 syntax errors."
