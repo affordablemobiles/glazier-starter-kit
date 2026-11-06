@@ -386,9 +386,10 @@ function Start-GlazierDeploymentGUI {
         if ($consoleHwnd -ne [IntPtr]::Zero) {
             [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 0) # SW_HIDE
         }
-        Get-Process -Name cmd, powershell -ErrorAction SilentlyContinue | ForEach-Object {
-            if ($_.MainWindowHandle -ne [IntPtr]::Zero) {
-                [void][Win32WindowHelper]::ShowWindow($_.MainWindowHandle, 0) # SW_HIDE
+        Get-Process -Name cmd -ErrorAction SilentlyContinue | ForEach-Object {
+            $h = $_.MainWindowHandle
+            if ($h -ne [IntPtr]::Zero -and ($null -eq $form -or $h -ne $form.Handle) -and ($null -eq $bgForm -or $h -ne $bgForm.Handle)) {
+                [void][Win32WindowHelper]::ShowWindow($h, 0) # SW_HIDE
             }
         }
     } catch {}
@@ -790,12 +791,14 @@ function Start-GlazierDeploymentGUI {
                 if ($consoleHwnd -ne [IntPtr]::Zero) {
                     [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 0) # SW_HIDE
                 }
-                Get-Process -Name cmd, powershell -ErrorAction SilentlyContinue | ForEach-Object {
-                    if ($_.MainWindowHandle -ne [IntPtr]::Zero) {
-                        [void][Win32WindowHelper]::ShowWindow($_.MainWindowHandle, 0) # SW_HIDE
+                Get-Process -Name cmd -ErrorAction SilentlyContinue | ForEach-Object {
+                    $h = $_.MainWindowHandle
+                    if ($h -ne [IntPtr]::Zero -and ($null -eq $form -or $h -ne $form.Handle) -and ($null -eq $bgForm -or $h -ne $bgForm.Handle)) {
+                        [void][Win32WindowHelper]::ShowWindow($h, 0) # SW_HIDE
                     }
                 }
             } catch {}
+            [void][Win32WindowHelper]::ShowWindow($form.Handle, 5) # SW_SHOW
             $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
             $form.Activate()
             $form.BringToFront()
@@ -1204,7 +1207,7 @@ function Start-GlazierDeploymentGUI {
                 Start-Sleep -Milliseconds 50
                 [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 3) # SW_MAXIMIZE
             }
-            Get-Process -Name cmd, powershell -ErrorAction SilentlyContinue | ForEach-Object {
+            Get-Process -Name cmd -ErrorAction SilentlyContinue | ForEach-Object {
                 if ($_.MainWindowHandle -ne [IntPtr]::Zero) {
                     [void][Win32WindowHelper]::ShowWindow($_.MainWindowHandle, 5) # SW_SHOW
                     [void][Win32WindowHelper]::ShowWindow($_.MainWindowHandle, 9) # SW_RESTORE

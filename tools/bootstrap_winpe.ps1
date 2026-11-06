@@ -994,8 +994,9 @@ if ($consoleHwnd -ne [IntPtr]::Zero) {
     [void][Win32Window]::ShowWindow($consoleHwnd, 0) # SW_HIDE
 }
 Get-Process -Name cmd -ErrorAction SilentlyContinue | ForEach-Object {
-    if ($_.MainWindowHandle -ne [IntPtr]::Zero) {
-        [void][Win32Window]::ShowWindow($_.MainWindowHandle, 0) # SW_HIDE
+    $h = $_.MainWindowHandle
+    if ($h -ne [IntPtr]::Zero -and ($null -eq $form -or $h -ne $form.Handle)) {
+        [void][Win32Window]::ShowWindow($h, 0) # SW_HIDE
     }
 }
 
@@ -1059,6 +1060,7 @@ $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::None
 $form.ClientSize = New-Object System.Drawing.Size(620, 250)
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+$form.ControlBox = $false
 $form.MaximizeBox = $false
 $form.MinimizeBox = $false
 $form.TopMost = $true
@@ -1200,10 +1202,12 @@ try {
         [void][Win32Window]::ShowWindow($consoleHwnd, 0) # SW_HIDE
     }
     Get-Process -Name cmd -ErrorAction SilentlyContinue | ForEach-Object {
-        if ($_.MainWindowHandle -ne [IntPtr]::Zero) {
-            [void][Win32Window]::ShowWindow($_.MainWindowHandle, 0) # SW_HIDE
+        $h = $_.MainWindowHandle
+        if ($h -ne [IntPtr]::Zero -and ($null -eq $form -or $h -ne $form.Handle)) {
+            [void][Win32Window]::ShowWindow($h, 0) # SW_HIDE
         }
     }
+    [void][Win32Window]::ShowWindow($form.Handle, 5) # SW_SHOW
     $form.Show()
     [System.Windows.Forms.Application]::DoEvents()
 
