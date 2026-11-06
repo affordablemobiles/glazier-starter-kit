@@ -114,7 +114,7 @@ controls:
 #################################################################################################
 
 - MultiPSCommand:
-  - ['Set-ExecutionPolicy Unrestricted -Force']
+  - ['Set-ExecutionPolicy Unrestricted -Force -ErrorAction SilentlyContinue']
   - ['Set-PSRepository -Name PSGallery -InstallationPolicy Trusted']
   - ['Install-Module PSWindowsUpdate -Confirm:$false']
   - ['Start-Service -name wuauserv']
@@ -129,7 +129,7 @@ controls:
 
 - MultiPSCommand:
   - ['Set-PSRepository -Name PSGallery -InstallationPolicy Untrusted']
-  - ['Set-ExecutionPolicy Restricted -Force']
+  - ['Set-ExecutionPolicy Restricted -Force -ErrorAction SilentlyContinue']
 
 #################################################################################################
 # Install Software                                                                              #

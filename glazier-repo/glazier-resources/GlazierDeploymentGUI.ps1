@@ -176,6 +176,7 @@ function Get-GlazierLiveProgress {
     if ($taskSig -ne $script:lastTaskSig) {
         $script:lastTaskSig = $taskSig
         $script:lastLogLine = ""
+        $script:lastGlazierError = ""
         $script:subTaskPct = 0
         $CurrentLogChunk = ""
     }
@@ -201,12 +202,15 @@ function Get-GlazierLiveProgress {
                 $script:subTaskPct = [int]$parsedSubPct
             }
         } catch {}
+    } elseif ($script:subTaskPct -ge 100 -and $CurrentLogChunk.Trim()) {
+        # Reset sub-task percentage when previous sub-task completed and non-progress log arrives
+        $script:subTaskPct = 0
     }
 
-    # Calculate overall percentage across the phase
-    $stepStartPct = if ($script:totalPhaseTasks -gt 0) { (($currentStepNum - 1) / [double]$script:totalPhaseTasks) * 100.0 } else { 0.0 }
-    $stepSpanPct  = if ($script:totalPhaseTasks -gt 0) { (1.0 / [double]$script:totalPhaseTasks) * 100.0 } else { 100.0 }
-    $script:currentOverallPct = [int][Math]::Min(98, [Math]::Max(6, [Math]::Round($stepStartPct + ($stepSpanPct * ($script:subTaskPct / 100.0)))))
+    # Calculate overall percentage across the phase strictly from main step
+    $script:currentOverallPct = if ($script:totalPhaseTasks -gt 0) {
+        [int][Math]::Min(98, [Math]::Max(6, [Math]::Round(($currentStepNum / [double]$script:totalPhaseTasks) * 100.0)))
+    } else { 6 }
 
     # Check friendly hints from body first
     $desc = $null
@@ -382,7 +386,7 @@ function Start-GlazierDeploymentGUI {
         if ($consoleHwnd -ne [IntPtr]::Zero) {
             [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 0) # SW_HIDE
         }
-        Get-Process -Name cmd -ErrorAction SilentlyContinue | ForEach-Object {
+        Get-Process -Name cmd, powershell -ErrorAction SilentlyContinue | ForEach-Object {
             if ($_.MainWindowHandle -ne [IntPtr]::Zero) {
                 [void][Win32WindowHelper]::ShowWindow($_.MainWindowHandle, 0) # SW_HIDE
             }
@@ -476,14 +480,32 @@ function Start-GlazierDeploymentGUI {
                 $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
                 $defaultName = "Glazier-Logs-$serial-$timestamp.zip"
 
+                $fallbackSaveDir = if ($usbDrive) {
+                    $usbDrive.RootDirectory.FullName
+                } elseif (Test-Path "C:\glazier_cache") {
+                    "C:\glazier_cache"
+                } else {
+                    "$rootDrive\"
+                }
+                $fallbackPath = Join-Path $fallbackSaveDir $defaultName
+
                 $sfd = New-Object System.Windows.Forms.SaveFileDialog
                 $sfd.Title = "Save Glazier Deployment Logs"
                 $sfd.Filter = "ZIP Archive (*.zip)|*.zip|Combined Log File (*.log)|*.log|All Files (*.*)|*.*"
                 $sfd.FileName = $defaultName
                 $sfd.InitialDirectory = $initDir
+                $sfd.AutoUpgradeEnabled = $false
 
-                if ($sfd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-                    $savePath = $sfd.FileName
+                $savePath = $null
+                try {
+                    if ($sfd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+                        $savePath = $sfd.FileName
+                    }
+                } catch {
+                    $savePath = $fallbackPath
+                }
+
+                if ($savePath) {
                     $discoveredLogs = @()
 
                     $logCandidates = @(
@@ -597,23 +619,12 @@ function Start-GlazierDeploymentGUI {
         # Header Title
         $lblTitle = New-Object System.Windows.Forms.Label
         $lblTitle.Location = New-Object System.Drawing.Point(82, 12)
-        $lblTitle.Size = New-Object System.Drawing.Size(($formW - 220), 28)
-        $lblTitle.AutoEllipsis = $true
+        $lblTitle.Size = New-Object System.Drawing.Size(($formW - 140), 28)
         $phaseHeader = if ($isWinPE) { "Installing Windows ($GlazierSpecOS) - Phase 1: WinPE Deployment" } else { "Finalizing Installation ($GlazierSpecOS) - Phase 2: Windows Setup" }
         $lblTitle.Text = $phaseHeader
         $lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 20, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
         $lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
         $panelHeader.Controls.Add($lblTitle)
-
-        # Percentage Readout Label
-        $lblPercent = New-Object System.Windows.Forms.Label
-        $lblPercent.Location = New-Object System.Drawing.Point(($panelHeader.Width - 90), 14)
-        $lblPercent.Size = New-Object System.Drawing.Size(74, 28)
-        $lblPercent.Text = "6%"
-        $lblPercent.TextAlign = [System.Drawing.ContentAlignment]::TopRight
-        $lblPercent.Font = New-Object System.Drawing.Font("Segoe UI", 18, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
-        $lblPercent.ForeColor = [System.Drawing.Color]::FromArgb(0, 120, 212)
-        $panelHeader.Controls.Add($lblPercent)
 
         # Dynamic Stage Subtitle
         $lblStage = New-Object System.Windows.Forms.Label
@@ -624,12 +635,12 @@ function Start-GlazierDeploymentGUI {
         $lblStage.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
         $panelHeader.Controls.Add($lblStage)
 
-        # 3-Panel Percentage Fill Bar with Aero Shimmer Pulse
+        # Main Step Percentage Fill Bar with Aero Shimmer Pulse (14px)
         $trackW = $formW - 140
-        $trackH = 22
+        $trackH = 14
 
         $progressTrack = New-Object System.Windows.Forms.Panel
-        $progressTrack.Location = New-Object System.Drawing.Point(82, 72)
+        $progressTrack.Location = New-Object System.Drawing.Point(82, 68)
         $progressTrack.Size = New-Object System.Drawing.Size($trackW, $trackH)
         $progressTrack.BackColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
         $progressTrack.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
@@ -654,6 +665,20 @@ function Start-GlazierDeploymentGUI {
         $progressPulseCore.Size = New-Object System.Drawing.Size(30, $trackH)
         $progressPulseCore.BackColor = [System.Drawing.Color]::FromArgb(147, 197, 253)
         $progressPulse.Controls.Add($progressPulseCore)
+
+        # Sub-Task Progress Bar (6px, cyan/teal)
+        $subProgressTrack = New-Object System.Windows.Forms.Panel
+        $subProgressTrack.Location = New-Object System.Drawing.Point(82, 86)
+        $subProgressTrack.Size = New-Object System.Drawing.Size($trackW, 6)
+        $subProgressTrack.BackColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
+        $subProgressTrack.BorderStyle = [System.Windows.Forms.BorderStyle]::None
+        $panelHeader.Controls.Add($subProgressTrack)
+
+        $subProgressFill = New-Object System.Windows.Forms.Panel
+        $subProgressFill.Location = New-Object System.Drawing.Point(0, 0)
+        $subProgressFill.Size = New-Object System.Drawing.Size(0, 6)
+        $subProgressFill.BackColor = [System.Drawing.Color]::FromArgb(14, 165, 233)
+        $subProgressTrack.Controls.Add($subProgressFill)
 
         # Terminal Header Panel
         $panelTermHeader = New-Object System.Windows.Forms.Panel
@@ -765,7 +790,7 @@ function Start-GlazierDeploymentGUI {
                 if ($consoleHwnd -ne [IntPtr]::Zero) {
                     [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 0) # SW_HIDE
                 }
-                Get-Process -Name cmd -ErrorAction SilentlyContinue | ForEach-Object {
+                Get-Process -Name cmd, powershell -ErrorAction SilentlyContinue | ForEach-Object {
                     if ($_.MainWindowHandle -ne [IntPtr]::Zero) {
                         [void][Win32WindowHelper]::ShowWindow($_.MainWindowHandle, 0) # SW_HIDE
                     }
@@ -947,6 +972,7 @@ function Start-GlazierDeploymentGUI {
         $script:subTaskPct = 0
         $script:currentOverallPct = 6
         $script:shimmerPos = -70
+        $script:rebootTriggered = $false
         $pulseFrames = @("[.  ]", "[.. ]", "[...]", "[ ..]", "[  .]", "[   ]")
         $pulseIdx = 0
 
@@ -966,6 +992,13 @@ function Start-GlazierDeploymentGUI {
                 $targetFillW = [Math]::Max(36, [int]($trackW * ($fillPct / 100.0)))
                 $progressFill.Width = [Math]::Min($trackW, $targetFillW)
 
+                # Update sub-task progress bar width
+                if ($script:subTaskPct -gt 0) {
+                    $subProgressFill.Width = [Math]::Min($trackW, [Math]::Max(4, [int][Math]::Round($trackW * ($script:subTaskPct / 100.0))))
+                } else {
+                    $subProgressFill.Width = 0
+                }
+
                 # Sweep shimmer pulse across completed portion
                 $script:shimmerPos = ($script:shimmerPos + 16)
                 if ($script:shimmerPos -gt ($progressFill.Width + 70)) {
@@ -984,7 +1017,10 @@ function Start-GlazierDeploymentGUI {
                         if ($tLine) {
                             $script:lastLogLine = $tLine
                         }
-                        if ($line -match 'CRITICAL|Error Code|Exception|Error encountered|FAILED') {
+                        if ($line -match 'Leaving WinPE|Rebooting with a timeout of|Shutting down with a timeout of|shutdown\.exe -r') {
+                            $script:rebootTriggered = $true
+                        }
+                        if ($line -match 'CRITICAL|IMAGING PROCESS FAILED|Error Code|GlazierError|ActionError|ConfigRunnerError|ConfigBuilderError|Unhandled exception|Traceback') {
                             $script:lastGlazierError = $line.Trim()
                         }
                     }
@@ -1001,7 +1037,10 @@ function Start-GlazierDeploymentGUI {
                         if ($tLine) {
                             $script:lastLogLine = $tLine
                         }
-                        if ($line -match 'CRITICAL|Error Code|Exception|Error encountered|FAILED') {
+                        if ($line -match 'Leaving WinPE|Rebooting with a timeout of|Shutting down with a timeout of|shutdown\.exe -r') {
+                            $script:rebootTriggered = $true
+                        }
+                        if ($line -match 'CRITICAL|IMAGING PROCESS FAILED|Error Code|GlazierError|ActionError|ConfigRunnerError|ConfigBuilderError|Unhandled exception|Traceback') {
                             $script:lastGlazierError = $line.Trim()
                         }
                     }
@@ -1016,7 +1055,6 @@ function Start-GlazierDeploymentGUI {
                 if ($prog) {
                     $lblStage.Text = $prog
                 }
-                $lblPercent.Text = "$($script:currentOverallPct)%"
 
                 [System.Windows.Forms.Application]::DoEvents()
                 Start-Sleep -Milliseconds 100
@@ -1029,7 +1067,10 @@ function Start-GlazierDeploymentGUI {
                 $cleanFinalOut = [regex]::Replace($cleanFinalOut, "\r\n|\r|\n", "`r`n")
                 $txtOutput.AppendText($cleanFinalOut)
                 foreach ($line in ($cleanFinalOut -split "`r?`n")) {
-                    if ($line -match 'CRITICAL|Error Code|Exception|Error encountered|FAILED') {
+                    if ($line -match 'Leaving WinPE|Rebooting with a timeout of|Shutting down with a timeout of|shutdown\.exe -r') {
+                        $script:rebootTriggered = $true
+                    }
+                    if ($line -match 'CRITICAL|IMAGING PROCESS FAILED|Error Code|GlazierError|ActionError|ConfigRunnerError|ConfigBuilderError|Unhandled exception|Traceback') {
                         $script:lastGlazierError = $line.Trim()
                     }
                 }
@@ -1040,7 +1081,10 @@ function Start-GlazierDeploymentGUI {
                 $cleanFinalErr = [regex]::Replace($cleanFinalErr, "\r\n|\r|\n", "`r`n")
                 $txtOutput.AppendText($cleanFinalErr)
                 foreach ($line in ($cleanFinalErr -split "`r?`n")) {
-                    if ($line -match 'CRITICAL|Error Code|Exception|Error encountered|FAILED') {
+                    if ($line -match 'Leaving WinPE|Rebooting with a timeout of|Shutting down with a timeout of|shutdown\.exe -r') {
+                        $script:rebootTriggered = $true
+                    }
+                    if ($line -match 'CRITICAL|IMAGING PROCESS FAILED|Error Code|GlazierError|ActionError|ConfigRunnerError|ConfigBuilderError|Unhandled exception|Traceback') {
                         $script:lastGlazierError = $line.Trim()
                     }
                 }
@@ -1055,19 +1099,19 @@ function Start-GlazierDeploymentGUI {
             $errStream.Dispose()
         }
 
-        if ($proc.ExitCode -eq 0) {
+        $isSuccess = ($proc.ExitCode -eq 0) -or ($script:rebootTriggered -and ($txtOutput.Text -notmatch 'IMAGING PROCESS FAILED'))
+        if ($isSuccess) {
             $panelHeader.BackColor = [System.Drawing.Color]::FromArgb(220, 252, 231)
             $lblBadge.Text = "[OK]"
             $lblBadge.BackColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
             $lblBadge.ForeColor = [System.Drawing.Color]::White
-            $lblPercent.Text = "100%"
-            $lblPercent.ForeColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
             $lblTitle.Text = "Stage Complete - Rebooting..."
             $lblStage.Text = "Glazier tasks completed successfully. Rebooting system..."
             $progressPulse.Visible = $false
             $progressFill.Location = New-Object System.Drawing.Point(0, 0)
             $progressFill.Size = New-Object System.Drawing.Size($trackW, $trackH)
             $progressFill.BackColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
+            $subProgressFill.Width = 0
 
             for ($sec = 0; $sec -lt 30; $sec++) {
                 [System.Windows.Forms.Application]::DoEvents()
@@ -1083,13 +1127,15 @@ function Start-GlazierDeploymentGUI {
             $form = $null
             try { $script:glazierMutex.ReleaseMutex() } catch {}
             try { [void][Win32WindowHelper]::SetThreadExecutionState(0x80000000) } catch {}
+            if ($isWinPE -and (Test-Path "C:\glazier_cache\task_list.yaml")) {
+                try { & "$env:SystemRoot\System32\wpeutil.exe" reboot } catch {}
+            }
             [Environment]::Exit(0)
         } else {
             $panelHeader.BackColor = [System.Drawing.Color]::FromArgb(254, 226, 226)
             $lblBadge.Text = "[!]"
             $lblBadge.BackColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
             $lblBadge.ForeColor = [System.Drawing.Color]::White
-            $lblPercent.ForeColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
             $lblTitle.Text = "DEPLOYMENT FAILED (Exit Code: $($proc.ExitCode)) - Please Photograph This Screen"
             if ($script:lastGlazierError) {
                 $lblStage.Text = "$($script:lastGlazierError) | Take a photo of this screen and send to IT Support."
@@ -1100,6 +1146,7 @@ function Start-GlazierDeploymentGUI {
             $progressFill.Location = New-Object System.Drawing.Point(0, 0)
             $progressFill.Size = New-Object System.Drawing.Size($trackW, $trackH)
             $progressFill.BackColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
+            $subProgressFill.Width = 0
             $btnSaveLogs.BackColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
 
             # Shift toolbar buttons left to accommodate $btnReboot on far right
@@ -1157,7 +1204,7 @@ function Start-GlazierDeploymentGUI {
                 Start-Sleep -Milliseconds 50
                 [void][Win32WindowHelper]::ShowWindow($consoleHwnd, 3) # SW_MAXIMIZE
             }
-            Get-Process -Name cmd -ErrorAction SilentlyContinue | ForEach-Object {
+            Get-Process -Name cmd, powershell -ErrorAction SilentlyContinue | ForEach-Object {
                 if ($_.MainWindowHandle -ne [IntPtr]::Zero) {
                     [void][Win32WindowHelper]::ShowWindow($_.MainWindowHandle, 5) # SW_SHOW
                     [void][Win32WindowHelper]::ShowWindow($_.MainWindowHandle, 9) # SW_RESTORE
