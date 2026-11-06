@@ -49,6 +49,34 @@ if (-not ('Win32WindowHelper' -as [type])) {
     Add-Type -TypeDefinition $win32HelperTypeDef -ErrorAction SilentlyContinue
 }
 
+function Test-WinPENetwork {
+    try {
+        $interfaces = [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()
+        foreach ($iface in $interfaces) {
+            if ($iface.OperationalStatus.ToString() -eq "Up" -and
+                $iface.NetworkInterfaceType.ToString() -ne "Loopback") {
+                $ipProps = $iface.GetIPProperties()
+                if ($ipProps -and $ipProps.UnicastAddresses) {
+                    foreach ($uni in $ipProps.UnicastAddresses) {
+                        if ($uni.Address.AddressFamily.ToString() -eq "InterNetwork") {
+                            $ipStr = $uni.Address.ToString()
+                            if ($ipStr -notlike "169.254.*" -and $ipStr -notlike "127.*" -and $ipStr -ne "0.0.0.0") {
+                                return [PSCustomObject]@{
+                                    Connected = $true
+                                    Interface = $iface.Description
+                                    Name      = $iface.Name
+                                    IPAddress = $ipStr
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } catch {}
+    return $null
+}
+
 function Get-GlazierLiveProgress {
     param(
         [string]$CurrentLogChunk = ""
@@ -529,6 +557,74 @@ function Start-GlazierDeploymentGUI {
 
         $form.Show()
         [System.Windows.Forms.Application]::DoEvents()
+
+        # Phase 1 vs Phase 2 Wi-Fi profile handling and network readiness
+        if ($isWinPE) {
+            if ((Get-Service -Name WlanSvc -ErrorAction SilentlyContinue).Status -eq 'Running') {
+                try {
+                    $wifiExportDir = "X:\glazier-resources\wifi_profiles"
+                    if (-not (Test-Path $wifiExportDir)) {
+                        New-Item -ItemType Directory -Path $wifiExportDir -Force | Out-Null
+                    }
+                    & netsh.exe wlan export profile key=clear folder="$wifiExportDir" | Out-Null
+                } catch {}
+            }
+        } else {
+            $wifiDir = "C:\glazier-resources\wifi_profiles"
+            if (Test-Path $wifiDir) {
+                try {
+                    Start-Service -Name WlanSvc -ErrorAction SilentlyContinue
+                    $pFiles = Get-ChildItem -Path $wifiDir -Filter "*.xml" -ErrorAction SilentlyContinue
+                    foreach ($pf in $pFiles) {
+                        & netsh.exe wlan add profile filename="$($pf.FullName)" user=all | Out-Null
+                        try {
+                            [xml]$px = Get-Content -Path $pf.FullName -ErrorAction SilentlyContinue
+                            $pn = if ($px -and $px.WLANProfile) { $px.WLANProfile.name } else { $pf.BaseName }
+                            if ($pn) {
+                                & netsh.exe wlan connect name="$pn" | Out-Null
+                            }
+                        } catch {}
+                    }
+                    Remove-Item -Path $wifiDir -Recurse -Force -ErrorAction SilentlyContinue
+                } catch {}
+            }
+
+            $netOk = Test-WinPENetwork
+            if (-not $netOk) {
+                $lblStage.Text = "Waiting for network connection in Windows..."
+                for ($nSec = 1; $nSec -le 15; $nSec++) {
+                    $netOk = Test-WinPENetwork
+                    if ($netOk) { break }
+                    $script:barPos = ($script:barPos + 18) % ($trackW + $fillW)
+                    $progressFill.Left = $script:barPos - $fillW
+                    [System.Windows.Forms.Application]::DoEvents()
+                    Start-Sleep -Milliseconds 1000
+                }
+                if (-not $netOk) {
+                    $wcCands = @(
+                        "C:\glazier-resources\WirelessConnect.exe",
+                        "C:\Windows\System32\WirelessConnect.exe",
+                        "C:\Windows\WirelessConnect.exe"
+                    )
+                    $wcExe = $wcCands | Where-Object { Test-Path $_ } | Select-Object -First 1
+                    if ($wcExe) {
+                        $form.TopMost = $false
+                        [System.Windows.Forms.Application]::DoEvents()
+                        Start-Process -FilePath $wcExe -Wait
+                        $form.TopMost = $true
+                        [System.Windows.Forms.Application]::DoEvents()
+                        for ($wSec = 1; $wSec -le 10; $wSec++) {
+                            $netOk = Test-WinPENetwork
+                            if ($netOk) { break }
+                            $script:barPos = ($script:barPos + 18) % ($trackW + $fillW)
+                            $progressFill.Left = $script:barPos - $fillW
+                            [System.Windows.Forms.Application]::DoEvents()
+                            Start-Sleep -Milliseconds 1000
+                        }
+                    }
+                }
+            }
+        }
 
         # Set up streaming output paths in $env:TEMP
         $stdoutLog = "$env:TEMP\glazier_stdout.log"

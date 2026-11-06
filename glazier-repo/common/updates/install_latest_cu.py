@@ -136,12 +136,13 @@ def fetch_with_retry(
 
 
 def detect_offline_os(target_drive: str = r'C:\\') -> tuple:
-  """Detects (os_name, primary_ver, fallback_ver, arch) from offline C:\\Windows."""
+  """Detects (os_name, primary_ver, fallback_ver, build_num, offline_ubr, arch) from offline C:\\Windows."""
   software_hive = os.path.join(
       target_drive, 'Windows', 'System32', 'config', 'SOFTWARE'
   )
   temp_key = r'HKLM\GLAZIER_OFFLINE_SW'
   build_num = None
+  offline_ubr = 0
   display_ver = None
   arch = 'x64'
 
@@ -170,6 +171,11 @@ def detect_offline_os(target_drive: str = r'C:\\') -> tuple:
           name, _, val = parts
           if name in ('CurrentBuild', 'CurrentBuildNumber'):
             build_num = val.strip()
+          elif name == 'UBR':
+            try:
+              offline_ubr = int(val.strip(), 0)
+            except ValueError:
+              pass
           elif name == 'DisplayVersion':
             display_ver = val.strip().upper()
           elif name == 'BuildLabEx' and 'arm64' in val.lower():
@@ -190,14 +196,15 @@ def detect_offline_os(target_drive: str = r'C:\\') -> tuple:
         fallback_ver = mapped_ver
         mapped_ver = display_ver
     logging.info(
-        'Detected offline OS on %s -> %s %s (Build %s, Arch %s)',
+        'Detected offline OS on %s -> %s %s (Build %s.%d, Arch %s)',
         target_drive,
         os_name,
         mapped_ver,
         build_num,
+        offline_ubr,
         arch,
     )
-    return os_name, mapped_ver, fallback_ver, arch
+    return os_name, mapped_ver, fallback_ver, build_num, offline_ubr, arch
   elif build_num and build_num.isdigit():
     # Future-proofing: Auto-detect future Windows 10/11 major releases dynamically
     os_name = 'Windows 11' if int(build_num) >= 22000 else 'Windows 10'
@@ -208,14 +215,15 @@ def detect_offline_os(target_drive: str = r'C:\\') -> tuple:
     )
     if mapped_ver:
       logging.info(
-          'Detected offline OS on %s -> %s %s (Build %s, Arch %s) via registry DisplayVersion',
+          'Detected offline OS on %s -> %s %s (Build %s.%d, Arch %s) via registry DisplayVersion',
           target_drive,
           os_name,
           mapped_ver,
           build_num,
+          offline_ubr,
           arch,
       )
-      return os_name, mapped_ver, None, arch
+      return os_name, mapped_ver, None, build_num, offline_ubr, arch
 
   raise RuntimeError(
       f'Could not auto-detect Windows build from {software_hive} (build={build_num})'
@@ -277,10 +285,21 @@ def find_latest_cu_update_id(os_name: str, os_ver: str, arch: str = 'x64') -> tu
       best_id,
       best_date.strftime('%Y-%m-%d') if best_date != datetime.min else 'Unknown',
   )
-  return best_id, best_title
+
+  target_ubr = None
+  ubr_match = re.search(r'\(\d+\.(\d+)\)', best_title)
+  if ubr_match:
+    target_ubr = int(ubr_match.group(1))
+
+  return best_id, best_title, target_ubr
 
 
-def resolve_layered_msu_packages(update_id: str, cache_dir: str) -> list:
+def resolve_layered_msu_packages(
+    update_id: str,
+    cache_dir: str,
+    target_drive: str = r'C:\\',
+    offline_ubr: int = 0,
+) -> list:
   """Queries DownloadDialog.aspx and returns ordered [[url, local_path, hex_sha256], ...]."""
   payload = json.dumps(
       [{'size': 0, 'languages': '', 'uidInfo': update_id, 'updateID': update_id}]
@@ -317,6 +336,37 @@ def resolve_layered_msu_packages(update_id: str, cache_dir: str) -> list:
     kb_match = re.search(r'(kb(\d+))', filename, re.IGNORECASE)
     kb_name = kb_match.group(1).lower() if kb_match else f'update_{idx}'
     kb_num = int(kb_match.group(2)) if kb_match else (99999999 + idx)
+    kb_id_upper = kb_name.upper()
+
+    # Per-layer skip checks:
+    # 1. Checkpoint KB5043080 for 24H2/25H2 where base ESD already has UBR >= 1742
+    if kb_id_upper == 'KB5043080' and offline_ubr >= 1742:
+      logging.info(
+          'Skipping layer %s: already slipstreamed in base offline OS image (UBR %d >= 1742).',
+          kb_id_upper,
+          offline_ubr,
+      )
+      continue
+
+    # 2. Check if servicing packages already contain *<kb_id>*.mum
+    servicing_dir = os.path.join(target_drive, 'Windows', 'servicing', 'Packages')
+    package_found = False
+    if os.path.isdir(servicing_dir):
+      try:
+        for pkg_file in os.listdir(servicing_dir):
+          if kb_id_upper in pkg_file.upper() and pkg_file.lower().endswith('.mum'):
+            package_found = True
+            break
+      except Exception as e:  # pylint: disable=broad-except
+        logging.warning('Could not inspect servicing packages in %s: %s', servicing_dir, e)
+
+    if package_found:
+      logging.info(
+          'Skipping layer %s: package already present in %s.',
+          kb_id_upper,
+          servicing_dir,
+      )
+      continue
 
     b64_sha256 = entry.get('sha256')
     # If the catalog provided a Base64 SHA256, convert to lowercase hex.
@@ -336,9 +386,8 @@ def resolve_layered_msu_packages(update_id: str, cache_dir: str) -> list:
     })
 
   if not layers:
-    raise RuntimeError(
-        f'No .msu files found in DownloadDialog.aspx for UpdateID {update_id}'
-    )
+    logging.info('All Cumulative Update layers are already installed in offline OS.')
+    return []
 
   # CRITICAL FOR UPDATE LAYERING:
   # Sort ascending by KB number so prerequisite Checkpoint CUs (e.g. KB5043080)
@@ -377,6 +426,7 @@ def main():
   parser.add_argument('--os-version', help='e.g. "25H2", "24H2", "23H2", "22H2"')
   parser.add_argument('--fallback-version', help='Optional fallback version (e.g. "24H2")')
   parser.add_argument('--arch', default='x64', help='Architecture (default: x64)')
+  parser.add_argument('--target-drive', default=r'C:\\', help='Target drive of offline OS')
   parser.add_argument(
       '--cache-dir', default=r'C:\glazier_cache', help='Local cache directory'
   )
@@ -389,8 +439,14 @@ def main():
     os_ver = args.os_version
     fallback_ver = args.fallback_version
     arch = args.arch
+    build_num = None
+    offline_ubr = 0
+    try:
+      _, _, _, build_num, offline_ubr, _ = detect_offline_os(args.target_drive)
+    except Exception:  # pylint: disable=broad-except
+      pass
   else:
-    os_name, os_ver, fallback_ver, arch = detect_offline_os(r'C:\\')
+    os_name, os_ver, fallback_ver, build_num, offline_ubr, arch = detect_offline_os(args.target_drive)
 
   result = find_latest_cu_update_id(os_name, os_ver, arch)
   if not result and fallback_ver:
@@ -408,8 +464,24 @@ def main():
         f'Unable to find any Cumulative Update in Microsoft Update Catalog for {os_name} {os_ver}'
     )
 
-  update_id, _ = result
-  msu_args = resolve_layered_msu_packages(update_id, args.cache_dir)
+  update_id, best_title, target_ubr = result
+  if target_ubr is not None and offline_ubr and offline_ubr >= target_ubr:
+    logging.info(
+        'Offline OS image is already at UBR %d (>= target CU UBR %d); skipping Cumulative Update download and installation.',
+        offline_ubr,
+        target_ubr,
+    )
+    sys.exit(0)
+
+  msu_args = resolve_layered_msu_packages(
+      update_id,
+      args.cache_dir,
+      target_drive=args.target_drive,
+      offline_ubr=offline_ubr,
+  )
+  if not msu_args:
+    logging.info('No pending Cumulative Update layers to install.')
+    sys.exit(0)
 
   logging.info(
       'Handing off %d layered MSU package(s) to Glazier UpdateMSU...',

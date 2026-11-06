@@ -702,9 +702,10 @@ if ($enableWinRE) {
         robocopy "$downloadDir\wlan_dlls" "$MountPath\Windows\System32" dmcmnutils.dll mdmpostprocessevaluator.dll mdmregistration.dll /ndl /njh /njs /b /np | Out-Null
     }
     if (Test-Path "$downloadDir\WirelessConnect.exe") {
-        Write-Log "Copying WirelessConnect.exe to $MountPath\Windows\ and $MountPath\Windows\System32\..."
+        Write-Log "Copying WirelessConnect.exe to $MountPath\Windows\, System32\, and glazier-resources\..."
         Copy-Item -Path "$downloadDir\WirelessConnect.exe" -Destination "$MountPath\Windows\WirelessConnect.exe" -Force
         Copy-Item -Path "$downloadDir\WirelessConnect.exe" -Destination "$MountPath\Windows\System32\WirelessConnect.exe" -Force
+        Copy-Item -Path "$downloadDir\WirelessConnect.exe" -Destination "$MountPath\glazier-resources\WirelessConnect.exe" -Force
     }
 }
 
@@ -1252,6 +1253,23 @@ try {
             }
         } else {
             Add-Log -Message "WirelessConnect.exe not found on system." -Detail "No Wi-Fi setup utility found."
+        }
+    }
+
+    # Export active Wi-Fi profile(s) with cleartext keys to X:\glazier-resources\wifi_profiles for carry-over to Windows
+    if ((Get-Service -Name WlanSvc -ErrorAction SilentlyContinue).Status -eq 'Running') {
+        try {
+            $wifiExportDir = "X:\glazier-resources\wifi_profiles"
+            if (-not (Test-Path $wifiExportDir)) {
+                New-Item -ItemType Directory -Path $wifiExportDir -Force | Out-Null
+            }
+            & netsh.exe wlan export profile key=clear folder="$wifiExportDir" | Out-Null
+            $expProfiles = Get-ChildItem -Path $wifiExportDir -Filter "*.xml" -ErrorAction SilentlyContinue
+            if ($expProfiles) {
+                Add-Log -Message "Exported $($expProfiles.Count) Wi-Fi profile(s) for carry-over to installed Windows OS."
+            }
+        } catch {
+            Add-Log -Message "Warning: Failed to export Wi-Fi profiles: $_"
         }
     }
 
