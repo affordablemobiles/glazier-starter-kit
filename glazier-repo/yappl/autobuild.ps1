@@ -1,47 +1,50 @@
 Param(
-    [string] = "http://glazier"
+    [string]$config_server = "http://glazier",
+    [string]$glazier_spec_os = "windows-stable-yappl"
 )
 
-if ( -eq "") {
-   = "http://glazier"
+if ($config_server -eq "") {
+  $config_server = "http://glazier"
 }
- = .TrimEnd('/')
- = "windows-stable-yappl"
+if ($glazier_spec_os -eq "") {
+  $glazier_spec_os = "windows-stable-yappl"
+}
+$config_server = $config_server.TrimEnd('/')
 
- = Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\MiniNT'
- = if () { "X:" } else { "C:" }
+$isWinPE = Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\MiniNT'
+$rootDrive = if ($isWinPE) { "X:" } else { "C:" }
 
-.UI.RawUI.WindowTitle = 'Glazier'
-:LOCALAPPDATA = ""
-:PYTHONPATH = "\glazier"
-:SSL_CERT_FILE = "\glazier-resources\ca-certs.crt"
-Write-Output "Starting Glazier imaging process ()..."
+$Host.UI.RawUI.WindowTitle = 'Glazier'
+$env:LOCALAPPDATA = "$rootDrive\"
+$env:PYTHONPATH = "$rootDrive\glazier\"
+$env:SSL_CERT_FILE = "$rootDrive\glazier-resources\ca-certs.crt"
+Write-Output "Starting Glazier imaging process ($glazier_spec_os)..."
 
- = @(
-    "\glazier-resources\GlazierDeploymentGUI.ps1",
+$guiCandidates = @(
+    "$rootDrive\glazier-resources\GlazierDeploymentGUI.ps1",
     "X:\glazier-resources\GlazierDeploymentGUI.ps1",
     "C:\glazier-resources\GlazierDeploymentGUI.ps1",
-    ":SystemRoot\System32\GlazierDeploymentGUI.ps1",
-    "\GlazierDeploymentGUI.ps1"
+    "$env:SystemRoot\System32\GlazierDeploymentGUI.ps1",
+    "$PSScriptRoot\GlazierDeploymentGUI.ps1"
 )
- = 
-foreach ( in ) {
-    if (Test-Path ) {
-         = 
+$guiScript = $null
+foreach ($cand in $guiCandidates) {
+    if (Test-Path $cand) {
+        $guiScript = $cand
         break
     }
 }
 
-if () {
-    . 
-    Start-GlazierDeploymentGUI -ConfigServer  -GlazierSpecOS 
+if ($guiScript) {
+    . $guiScript
+    Start-GlazierDeploymentGUI -ConfigServer $config_server -GlazierSpecOS $glazier_spec_os
 } else {
-     = @(
-        "\glazier\glazierutobuild.py",
-        "--config_server=",
-        "--resource_path=\glazier-resources",
-        "--glazier_spec_os=",
+    $py_args = @(
+        "$rootDrive\glazier\glazier\autobuild.py",
+        "--config_server=$config_server",
+        "--resource_path=$rootDrive\glazier-resources",
+        "--glazier_spec_os=$glazier_spec_os",
         '--preserve_tasks=true'
     )
-    & "\Python\python.exe" 
+    & "$rootDrive\Python\python.exe" $py_args
 }

@@ -433,7 +433,7 @@ function Get-GlazierLiveProgress {
         return "Processing deployment tasks..."
     }
 
-    $blocks = [regex]::Split($rawYaml, '(?m)^-\s+data:\s*$')
+    $blocks = [regex]::Split($rawYaml, '(?m)^-\s+data:\s*\r?$')
     $tasks = @()
     foreach ($b in $blocks) {
         $trimmed = $b.Trim()
@@ -446,7 +446,7 @@ function Get-GlazierLiveProgress {
             if ($lines.Length -gt 1) {
                 $contentLines = @()
                 for ($li = 1; $li -lt $lines.Length; $li++) {
-                    if ($lines[$li] -match '^\s*path:\s*$') { break }
+                    if ($lines[$li] -match '^\s*path:\s*') { break }
                     $contentLines += $lines[$li]
                 }
                 $taskBody = $contentLines -join "`n"
@@ -481,27 +481,29 @@ function Get-GlazierLiveProgress {
     $act = $activeTask.Action
     $body = $activeTask.Body
 
-    # Check friendly hints
+    # Check friendly hints from task body or current log chunk
     $desc = $null
-    if ($body -match 'Start-OSDCloud') {
+    $targetText = if ($CurrentLogChunk) { "$body`n$CurrentLogChunk" } else { $body }
+
+    if ($targetText -match 'Start-OSDCloud') {
         $desc = "Installing Windows OS image and hardware drivers (OSDCloud)..."
-    } elseif ($body -match 'bcdboot') {
+    } elseif ($targetText -match 'bcdboot') {
         $desc = "Configuring Windows UEFI Boot Manager..."
-    } elseif ($body -match 'install_latest_cu\.py|UpdateMSU') {
+    } elseif ($targetText -match 'install_latest_cu\.py|UpdateMSU|KB\d+') {
         $desc = "Downloading and installing latest Windows Cumulative Updates..."
-    } elseif ($body -match 'Invoke-OSDSpecialize|unattend\.xml') {
+    } elseif ($targetText -match 'Invoke-OSDSpecialize|unattend\.xml') {
         $desc = "Applying Windows unattend specialization config..."
-    } elseif ($body -match 'odt_installer|setup\.exe\s+/configure|Office365') {
+    } elseif ($targetText -match 'odt_installer|setup\.exe\s+/configure|Office365') {
         $desc = "Installing Microsoft Office 365..."
-    } elseif ($body -match 'GoogleChromeStandaloneEnterprise') {
+    } elseif ($targetText -match 'GoogleChromeStandaloneEnterprise') {
         $desc = "Installing Google Chrome Enterprise..."
-    } elseif ($body -match 'EndpointVerification') {
+    } elseif ($targetText -match 'EndpointVerification') {
         $desc = "Installing Google Endpoint Verification..."
-    } elseif ($body -match 'gcpwstandaloneenterprise') {
+    } elseif ($targetText -match 'gcpwstandaloneenterprise') {
         $desc = "Installing Google Credential Provider for Windows (GCPW)..."
-    } elseif ($body -match 'mgmt-installer') {
+    } elseif ($targetText -match 'mgmt-installer') {
         $desc = "Installing Enterprise Management Agent..."
-    } elseif ($body -match 'Install-WindowsUpdate') {
+    } elseif ($targetText -match 'Install-WindowsUpdate') {
         $desc = "Checking and installing Windows and driver updates..."
     }
 
@@ -593,7 +595,8 @@ function Start-GlazierDeploymentGUI {
         [string]$GlazierSpecOS = "windows-stable",
         [string]$ResourcePath = "",
         [string]$PythonExe = "",
-        [string]$GlazierScript = ""
+        [string]$GlazierScript = "",
+        [string]$ConfigRootPath = ""
     )
 
     $isWinPE = Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\MiniNT'
@@ -608,6 +611,10 @@ function Start-GlazierDeploymentGUI {
     if ([string]::IsNullOrWhiteSpace($GlazierScript)) {
         $GlazierScript = "$rootDrive\glazier\glazier\autobuild.py"
     }
+
+    $env:LOCALAPPDATA = "$rootDrive\"
+    $env:PYTHONPATH = "$rootDrive\glazier\"
+    $env:SSL_CERT_FILE = "$ResourcePath\ca-certs.crt"
 
     $consoleHwnd = [IntPtr]::Zero
     try {
@@ -822,6 +829,9 @@ function Start-GlazierDeploymentGUI {
 
         $env:PYTHONUNBUFFERED = "1"
         $pyArgs = @("-u", $GlazierScript, "--config_server=$ConfigServer", "--resource_path=$ResourcePath", "--glazier_spec_os=$GlazierSpecOS", "--preserve_tasks=true")
+        if (-not [string]::IsNullOrWhiteSpace($ConfigRootPath)) {
+            $pyArgs += "--config_root_path=$ConfigRootPath"
+        }
 
         $proc = Start-Process -FilePath $PythonExe `
             -ArgumentList $pyArgs `
@@ -837,6 +847,7 @@ function Start-GlazierDeploymentGUI {
 
         $script:totalPhaseTasks = 0
         $script:lastGlazierError = ""
+        $script:lastLogLine = ""
 
         try {
             while (-not $proc.HasExited) {
@@ -847,6 +858,10 @@ function Start-GlazierDeploymentGUI {
                     $txtOutput.AppendText($chunk)
                     $hasNewText = $true
                     foreach ($line in ($chunk -split "`r?`n")) {
+                        $tLine = $line.Trim()
+                        if ($tLine) {
+                            $script:lastLogLine = $tLine
+                        }
                         if ($line -match 'CRITICAL|Error Code|Exception|Error encountered|FAILED') {
                             $script:lastGlazierError = $line.Trim()
                         }
@@ -858,6 +873,10 @@ function Start-GlazierDeploymentGUI {
                     $txtOutput.AppendText($errChunk)
                     $hasNewText = $true
                     foreach ($line in ($errChunk -split "`r?`n")) {
+                        $tLine = $line.Trim()
+                        if ($tLine) {
+                            $script:lastLogLine = $tLine
+                        }
                         if ($line -match 'CRITICAL|Error Code|Exception|Error encountered|FAILED') {
                             $script:lastGlazierError = $line.Trim()
                         }
@@ -868,8 +887,8 @@ function Start-GlazierDeploymentGUI {
                     [void][Win32WindowHelper]::SendMessage($txtOutput.Handle, 0x0115, [IntPtr]7, [IntPtr]::Zero)
                 }
 
-                # Dynamically update progress from task list
-                $prog = Get-GlazierLiveProgress
+                # Dynamically update progress from task list and latest log
+                $prog = Get-GlazierLiveProgress -CurrentLogChunk $script:lastLogLine
                 if ($prog) {
                     $lblStage.Text = $prog
                 }
@@ -950,6 +969,9 @@ function Start-GlazierDeploymentGUI {
         # Fallback to direct CLI execution if GUI threw
         $env:PYTHONUNBUFFERED = "1"
         $pyArgs = @($GlazierScript, "--config_server=$ConfigServer", "--resource_path=$ResourcePath", "--glazier_spec_os=$GlazierSpecOS", "--preserve_tasks=true")
+        if (-not [string]::IsNullOrWhiteSpace($ConfigRootPath)) {
+            $pyArgs += "--config_root_path=$ConfigRootPath"
+        }
         & $PythonExe $pyArgs
     }
 }
