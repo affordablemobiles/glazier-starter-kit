@@ -200,6 +200,8 @@ function Get-GlazierLiveProgress {
         $desc = "Installing Google Credential Provider for Windows (GCPW)..."
     } elseif ($body -match 'mgmt-installer') {
         $desc = "Installing Enterprise Management Agent..."
+    } elseif ($body -match 'stage_wifi_profiles|Stage-GlazierWifiProfiles') {
+        $desc = "Staging Wi-Fi profiles into target Windows OS..."
     } elseif ($body -match 'Install-WindowsUpdate') {
         $desc = "Checking and installing Windows and driver updates..."
     }
@@ -216,6 +218,8 @@ function Get-GlazierLiveProgress {
             $desc = "Installing Microsoft Office 365..."
         } elseif ($CurrentLogChunk -match 'mgmt-installer') {
             $desc = "Installing Enterprise Management Agent..."
+        } elseif ($CurrentLogChunk -match 'stage_wifi_profiles|Stage-GlazierWifiProfiles') {
+            $desc = "Staging Wi-Fi profiles into target Windows OS..."
         } elseif ($CurrentLogChunk -match 'KB\d+') {
             $desc = "Downloading and installing Windows Cumulative Updates..."
         }

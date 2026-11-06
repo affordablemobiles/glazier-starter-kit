@@ -47,7 +47,7 @@ $setupCompletePath = Join-Path $scriptsDir "SetupComplete.cmd"
 
 $setupCompleteSnippet = @'
 net start WlanSvc >nul 2>&1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "for ($i=0; $i -lt 15; $i++) { if ((& netsh.exe wlan show interfaces) -match 'Name\s*:') { break }; Start-Sleep -Seconds 1 }; Get-ChildItem 'C:\Windows\Setup\Scripts\wifi_profiles\*.xml' -ErrorAction SilentlyContinue | ForEach-Object { $fn = $_.FullName; & netsh.exe wlan add profile ('filename=' + $fn) user=all | Out-Null; [xml]$x = Get-Content $fn -Raw; if ($x.WLANProfile.name) { $pn = $x.WLANProfile.name; & netsh.exe wlan connect ('name=' + $pn) | Out-Null }; Remove-Item $fn -Force -ErrorAction SilentlyContinue }; Remove-Item 'C:\Windows\Setup\Scripts\wifi_profiles' -Recurse -Force -ErrorAction SilentlyContinue"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "for ($i=0; $i -lt 15; $i++) { if ((& netsh.exe wlan show interfaces) -match 'Name\s*:') { break }; Start-Sleep -Seconds 1 }; Get-ChildItem 'C:\Windows\Setup\Scripts\wifi_profiles\*.xml' -ErrorAction SilentlyContinue | ForEach-Object { $fn = $_.FullName; & netsh.exe wlan add profile ('filename=' + $fn) user=all | Out-Null; if ($LASTEXITCODE -eq 0) { try { [xml]$x = Get-Content $fn -Raw; if ($x.WLANProfile.name) { $pn = $x.WLANProfile.name; & netsh.exe wlan connect ('name=' + $pn) | Out-Null } } catch {}; Remove-Item $fn -Force -ErrorAction SilentlyContinue } }; if (-not (Get-ChildItem 'C:\Windows\Setup\Scripts\wifi_profiles\*.xml' -ErrorAction SilentlyContinue)) { Remove-Item 'C:\Windows\Setup\Scripts\wifi_profiles' -Recurse -Force -ErrorAction SilentlyContinue }"
 '@
 
 if (Test-Path $setupCompletePath) {
@@ -62,6 +62,26 @@ if (Test-Path $setupCompletePath) {
     $newContent = "@echo off`r`n$setupCompleteSnippet`r`n"
     [System.IO.File]::WriteAllText($setupCompletePath, $newContent, [System.Text.Encoding]::ASCII)
     Write-Output "Created $setupCompletePath with Wi-Fi auto-import snippet."
+}
+
+# Configure offline registry RunOnce fallback in C:\Windows\System32\Config\SOFTWARE
+# On hardware with OEM BIOS MSDM keys, Windows Setup skips SetupComplete.cmd by design.
+# RunOnce ensures the profile import runs on first logon if SetupComplete was skipped.
+$softwareHive = "C:\Windows\System32\Config\SOFTWARE"
+if (Test-Path $softwareHive) {
+    try {
+        & reg.exe load HKLM\TempWifiSoft "$softwareHive" 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            & reg.exe add "HKLM\TempWifiSoft\Microsoft\Windows\CurrentVersion\RunOnce" /v GlazierWifiImport /t REG_SZ /d "cmd.exe /c C:\Windows\Setup\Scripts\SetupComplete.cmd" /f 2>$null | Out-Null
+            & reg.exe unload HKLM\TempWifiSoft 2>$null | Out-Null
+            Write-Output "Configured offline HKLM RunOnce fallback for Wi-Fi profile import."
+        } else {
+            Write-Output "Warning: Unable to load offline SOFTWARE hive to register RunOnce fallback."
+        }
+    } catch {
+        Write-Output "Warning: Failed to configure offline RunOnce fallback: $_"
+        try { & reg.exe unload HKLM\TempWifiSoft 2>$null | Out-Null } catch {}
+    }
 }
 
 exit 0
