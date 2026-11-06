@@ -966,6 +966,9 @@ public class Win32Window {
 
     [DllImport("gdi32.dll", CharSet = CharSet.Auto)]
     public static extern int AddFontResource(string lpFileName);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 }
 "@
 if (-not ('Win32Window' -as [type])) {
@@ -1156,13 +1159,30 @@ function Set-Step {
 try {
     $form.Show()
     [System.Windows.Forms.Application]::DoEvents()
+    if ([System.Windows.Forms.Application]::RenderWithVisualStyles) {
+        [void][Win32Window]::SendMessage($progressBar.Handle, 0x040A, [IntPtr]1, [IntPtr]25) # PBM_SETMARQUEE
+    } else {
+        $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+        $progressBar.Minimum = 0
+        $progressBar.Maximum = 100
+        $progressBar.Value = 10
+    }
+
+    function Pulse-Progress {
+        if (-not [System.Windows.Forms.Application]::RenderWithVisualStyles) {
+            $progressBar.Value = ($progressBar.Value + 4) % 100
+            if ($progressBar.Value -eq 0) { $progressBar.Value = 4 }
+        }
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+
     Add-Log -Message "Glazier WinPE initialization started." -Detail "Display configured."
 
     # Step 1 of 4: Initializing WinPE hardware and drivers (wpeinit)
     Set-Step -Status "Step 1 of 4: Initializing WinPE hardware and drivers (wpeinit)..." -Detail "Running wpeinit.exe..."
     $wpeProc = Start-Process -FilePath "$env:SystemRoot\System32\wpeinit.exe" -NoNewWindow -PassThru
     while (-not $wpeProc.HasExited) {
-        [System.Windows.Forms.Application]::DoEvents()
+        Pulse-Progress
         Start-Sleep -Milliseconds 100
     }
     Add-Log -Message "wpeinit.exe completed." -Detail "Hardware and network drivers initialized."
@@ -1196,7 +1216,7 @@ try {
         }
         Add-Log -Message "Waiting for active IPv4 connection (Attempt $sec of $maxPollSeconds)..." -Detail "Waiting for network link ($sec/$maxPollSeconds)..."
         for ($tick = 0; $tick -lt 10; $tick++) {
-            [System.Windows.Forms.Application]::DoEvents()
+            Pulse-Progress
             Start-Sleep -Milliseconds 100
         }
     }
@@ -1225,7 +1245,7 @@ try {
                     break
                 }
                 for ($tick = 0; $tick -lt 10; $tick++) {
-                    [System.Windows.Forms.Application]::DoEvents()
+                    Pulse-Progress
                     Start-Sleep -Milliseconds 100
                 }
             }
@@ -1289,7 +1309,7 @@ try {
                 $lastLineCount = $lines.Count
             }
         }
-        [System.Windows.Forms.Application]::DoEvents()
+        Pulse-Progress
         Start-Sleep -Milliseconds 100
     }
 
@@ -1309,7 +1329,7 @@ try {
     Add-Log -Message "Initialization complete. Handing off to autobuild.ps1..."
 
     for ($t = 0; $t -lt 5; $t++) {
-        [System.Windows.Forms.Application]::DoEvents()
+        Pulse-Progress
         Start-Sleep -Milliseconds 100
     }
 } catch {

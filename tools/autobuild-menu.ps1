@@ -819,6 +819,15 @@ function Start-GlazierDeploymentGUI {
         $form.Show()
         [System.Windows.Forms.Application]::DoEvents()
 
+        if ([System.Windows.Forms.Application]::RenderWithVisualStyles) {
+            [void][Win32WindowHelper]::SendMessage($progressBar.Handle, 0x040A, [IntPtr]1, [IntPtr]25) # PBM_SETMARQUEE
+        } else {
+            $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+            $progressBar.Minimum = 0
+            $progressBar.Maximum = 100
+            $progressBar.Value = 10
+        }
+
         # Set up streaming output paths in $env:TEMP
         $stdoutLog = "$env:TEMP\glazier_stdout.log"
         $stderrLog = "$env:TEMP\glazier_stderr.log"
@@ -848,10 +857,20 @@ function Start-GlazierDeploymentGUI {
         $script:totalPhaseTasks = 0
         $script:lastGlazierError = ""
         $script:lastLogLine = ""
+        $pulseFrames = @("[.  ]", "[.. ]", "[...]", "[ ..]", "[  .]", "[   ]")
+        $pulseIdx = 0
 
         try {
             while (-not $proc.HasExited) {
                 $hasNewText = $false
+
+                $pulseIdx = ($pulseIdx + 1) % $pulseFrames.Length
+                $lblBadge.Text = $pulseFrames[$pulseIdx]
+
+                if (-not [System.Windows.Forms.Application]::RenderWithVisualStyles) {
+                    $progressBar.Value = ($progressBar.Value + 4) % 100
+                    if ($progressBar.Value -eq 0) { $progressBar.Value = 4 }
+                }
 
                 $chunk = $outReader.ReadToEnd()
                 if ($chunk) {
