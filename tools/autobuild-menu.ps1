@@ -513,8 +513,24 @@ function Get-GlazierLiveProgress {
     if ($taskSig -ne $script:lastTaskSig) {
         $script:lastTaskSig = $taskSig
         $script:lastLogLine = ""
+        $script:subTaskPct = 0
         $CurrentLogChunk = ""
     }
+
+    # Check for sub-task percentage in CurrentLogChunk (e.g. "45%", "14.2%", "(40%)", "[=== 35.0% ===]")
+    if ($CurrentLogChunk -match '(?<![0-9.])(\d{1,3}(?:\.\d+)?)\s*%') {
+        try {
+            $parsedSubPct = [double]$matches[1]
+            if ($parsedSubPct -ge 0 -and $parsedSubPct -le 100) {
+                $script:subTaskPct = [int]$parsedSubPct
+            }
+        } catch {}
+    }
+
+    # Calculate overall percentage across the phase
+    $stepStartPct = if ($script:totalPhaseTasks -gt 0) { (($currentStepNum - 1) / [double]$script:totalPhaseTasks) * 100.0 } else { 0.0 }
+    $stepSpanPct  = if ($script:totalPhaseTasks -gt 0) { (1.0 / [double]$script:totalPhaseTasks) * 100.0 } else { 100.0 }
+    $script:currentOverallPct = [int][Math]::Min(98, [Math]::Max(6, [Math]::Round($stepStartPct + ($stepSpanPct * ($script:subTaskPct / 100.0)))))
 
     # Check friendly hints from body first
     $desc = $null
@@ -634,7 +650,12 @@ function Get-GlazierLiveProgress {
     }
 
     if ($script:totalPhaseTasks -gt 0) {
-        return "Step $currentStepNum of $($script:totalPhaseTasks): $desc"
+        $stepPrefix = if ($script:subTaskPct -gt 0) {
+            "Step $currentStepNum of $($script:totalPhaseTasks) ($($script:subTaskPct)%): "
+        } else {
+            "Step $currentStepNum of $($script:totalPhaseTasks): "
+        }
+        return "$stepPrefix$desc"
     }
     return $desc
 }
