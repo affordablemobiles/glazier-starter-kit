@@ -71,6 +71,9 @@ controls:
 - CopyDir: ['X:\glazier-resources', 'C:\glazier-resources', true]
 - pull:
   - ['autobuild.ps1', 'C:\windows\system32\autobuild.ps1']
+  - ['https://storage.googleapis.com/a1comms-glazier-config/common/stage_wifi_profiles.ps1', 'C:\glazier_cache\stage_wifi_profiles.ps1']
+
+- PSScript: ['C:\glazier_cache\stage_wifi_profiles.ps1']
 
 - BuildInfoDump: []
 

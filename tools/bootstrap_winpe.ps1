@@ -1223,6 +1223,56 @@ try {
         }
     }
 
+    # Auto-import host-staged Wi-Fi profiles into WinPE RAM (X:\glazier-resources\wifi_profiles)
+    $wifiRamDir = "X:\glazier-resources\wifi_profiles"
+    if (-not (Test-Path $wifiRamDir)) {
+        New-Item -ItemType Directory -Path $wifiRamDir -Force | Out-Null
+    }
+
+    try {
+        $candidateDrives = [System.IO.DriveInfo]::GetDrives() | Where-Object { $_.IsReady -and $_.Name -ne 'X:\' }
+        foreach ($cDrive in $candidateDrives) {
+            $stagedSourcesDir = Join-Path $cDrive.RootDirectory.FullName "sources\wifi_profiles"
+            if (Test-Path $stagedSourcesDir) {
+                $stagedXmls = Get-ChildItem -Path $stagedSourcesDir -Filter "*.xml" -ErrorAction SilentlyContinue
+                if ($stagedXmls) {
+                    foreach ($sXml in $stagedXmls) {
+                        Copy-Item -Path $sXml.FullName -Destination $wifiRamDir -Force -ErrorAction SilentlyContinue
+                    }
+                }
+            }
+        }
+    } catch {
+        Add-Log -Message "Warning: Failed scanning drives for staged Wi-Fi profiles: $_"
+    }
+
+    $stagedProfiles = Get-ChildItem -Path $wifiRamDir -Filter "*.xml" -ErrorAction SilentlyContinue
+    if ($stagedProfiles) {
+        Add-Log -Message "Found $($stagedProfiles.Count) staged Wi-Fi profile(s). Waiting for wireless adapter..." -Detail "Configuring Wi-Fi..."
+        for ($wWait = 1; $wWait -le 10; $wWait++) {
+            $wlanIfaces = (& netsh.exe wlan show interfaces 2>$null) -join "`n"
+            if ($wlanIfaces -match 'Name\s*:') { break }
+            for ($tick = 0; $tick -lt 10; $tick++) {
+                Pulse-Progress
+                Start-Sleep -Milliseconds 100
+            }
+        }
+
+        foreach ($pf in $stagedProfiles) {
+            & netsh.exe wlan add profile filename="$($pf.FullName)" user=all | Out-Null
+            try {
+                [xml]$px = Get-Content -Path $pf.FullName -ErrorAction SilentlyContinue
+                $pn = if ($px -and $px.WLANProfile) { $px.WLANProfile.name } else { $pf.BaseName }
+                if ($pn) {
+                    & netsh.exe wlan connect name="$pn" | Out-Null
+                    Add-Log -Message "Connected to Wi-Fi network: $pn" -Detail "Connecting to $pn..."
+                }
+            } catch {
+                Add-Log -Message "Warning: Failed to connect Wi-Fi profile $($pf.Name): $_"
+            }
+        }
+    }
+
     # Poll Test-WinPENetwork every 1 second for up to 15 seconds
     $activeNet = $null
     $maxPollSeconds = 15

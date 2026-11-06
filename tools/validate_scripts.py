@@ -86,16 +86,16 @@ def check_ascii_and_powershell(root_dir='.'):
                   f'{relpath}:{idx}: Invalid scope prefix "${m.group(1)}:" in: {line.strip()}'
               )
 
-        # Check here-strings balance
-        hs_double_open = len(text.split('@"')) - 1
-        hs_double_close = len(text.split('"@')) - 1
+        # Check here-strings balance (PowerShell requires @' / @" at end of line, and closing '@ / "@ at start of line)
+        hs_double_open = len(re.findall(r'@"\s*\r?\n', text))
+        hs_double_close = len(re.findall(r'(?m)^\s*"@', text))
         if hs_double_open != hs_double_close:
           errors.append(
               f'{relpath}: Mismatched double-quote here-strings (@" vs "@): {hs_double_open} vs {hs_double_close}'
           )
 
-        hs_single_open = len(text.split("@'")) - 1
-        hs_single_close = len(text.split("'@")) - 1
+        hs_single_open = len(re.findall(r"@'\s*\r?\n", text))
+        hs_single_close = len(re.findall(r"(?m)^\s*'@", text))
         if hs_single_open != hs_single_close:
           errors.append(
               f'{relpath}: Mismatched single-quote here-strings (@\' vs \'@): {hs_single_open} vs {hs_single_close}'

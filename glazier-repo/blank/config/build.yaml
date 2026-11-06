@@ -34,6 +34,15 @@ controls:
 
 - MkDir: ['C:\glazier_cache']
 
+#################################################################################################
+# Stage Wi-Fi profiles for Windows Setup / OOBE                                                #
+#################################################################################################
+
+- pull:
+  - ['https://storage.googleapis.com/a1comms-glazier-config/common/stage_wifi_profiles.ps1', 'C:\glazier_cache\stage_wifi_profiles.ps1']
+
+- PSScript: ['C:\glazier_cache\stage_wifi_profiles.ps1']
+
 - BuildInfoDump: []
 
 - SetTimer: ['winpe_stop']

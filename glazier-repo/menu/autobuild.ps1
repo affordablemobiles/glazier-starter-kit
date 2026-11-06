@@ -1070,12 +1070,28 @@ function Start-GlazierDeploymentGUI {
 
         # Phase 1 vs Phase 2 Wi-Fi profile handling and network readiness
         if ($isWinPE) {
+            $wifiExportDir = "X:\glazier-resources\wifi_profiles"
+            if (-not (Test-Path $wifiExportDir)) {
+                New-Item -ItemType Directory -Path $wifiExportDir -Force | Out-Null
+            }
+            # Scan candidate drives for staged profiles if none present in RAM
+            $existingProfiles = Get-ChildItem -Path $wifiExportDir -Filter "*.xml" -ErrorAction SilentlyContinue
+            if (-not $existingProfiles -or $existingProfiles.Count -eq 0) {
+                try {
+                    $candidateDrives = [System.IO.DriveInfo]::GetDrives() | Where-Object { $_.IsReady -and $_.Name -ne 'X:\' }
+                    foreach ($cDrive in $candidateDrives) {
+                        $stagedSourcesDir = Join-Path $cDrive.RootDirectory.FullName "sources\wifi_profiles"
+                        if (Test-Path $stagedSourcesDir) {
+                            $stagedXmls = Get-ChildItem -Path $stagedSourcesDir -Filter "*.xml" -ErrorAction SilentlyContinue
+                            foreach ($sXml in $stagedXmls) {
+                                Copy-Item -Path $sXml.FullName -Destination $wifiExportDir -Force -ErrorAction SilentlyContinue
+                            }
+                        }
+                    }
+                } catch {}
+            }
             if ((Get-Service -Name WlanSvc -ErrorAction SilentlyContinue).Status -eq 'Running') {
                 try {
-                    $wifiExportDir = "X:\glazier-resources\wifi_profiles"
-                    if (-not (Test-Path $wifiExportDir)) {
-                        New-Item -ItemType Directory -Path $wifiExportDir -Force | Out-Null
-                    }
                     & netsh.exe wlan export profile key=clear folder="$wifiExportDir" | Out-Null
                 } catch {}
             }
