@@ -602,6 +602,13 @@ function Start-GlazierDeploymentGUI {
     $isWinPE = Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\MiniNT'
     $rootDrive = if ($isWinPE) { "X:" } else { "C:" }
 
+    $createdNew = $false
+    $script:glazierMutex = New-Object System.Threading.Mutex($true, "Global\GlazierDeploymentGUIMutex", [ref]$createdNew)
+    if (-not $createdNew) {
+        Write-Host "Another instance of Glazier Deployment GUI is already running. Exiting duplicate instance."
+        [Environment]::Exit(0)
+    }
+
     if ([string]::IsNullOrWhiteSpace($ResourcePath)) {
         $ResourcePath = "$rootDrive\glazier-resources"
     }
@@ -689,6 +696,26 @@ function Start-GlazierDeploymentGUI {
         $panelHeader.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
         $form.Controls.Add($panelHeader)
 
+        $bgForm = $null
+        if (-not $isWinPE) {
+            $bgImgPath = if (Test-Path "$env:TEMP\winpe_cropped.jpg") { "$env:TEMP\winpe_cropped.jpg" } else { "C:\glazier-resources\winpe.jpg" }
+            if (Test-Path $bgImgPath) {
+                $bgForm = New-Object System.Windows.Forms.Form
+                $bgForm.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+                $bgForm.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+                $bgForm.Bounds = $screen
+                $bgForm.BackColor = [System.Drawing.Color]::FromArgb(2, 66, 43)
+                $bgForm.ShowInTaskbar = $false
+                $bgForm.TopMost = $false
+                try {
+                    $bgForm.BackgroundImage = [System.Drawing.Image]::FromFile($bgImgPath)
+                    $bgForm.BackgroundImageLayout = [System.Windows.Forms.ImageLayout]::Stretch
+                } catch {}
+                $bgForm.Show()
+                $form.Owner = $bgForm
+            }
+        }
+
         # Status Badge
         $lblBadge = New-Object System.Windows.Forms.Label
         $lblBadge.Location = New-Object System.Drawing.Point(16, 16)
@@ -719,13 +746,23 @@ function Start-GlazierDeploymentGUI {
         $lblStage.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
         $panelHeader.Controls.Add($lblStage)
 
-        # Progress Bar
-        $progressBar = New-Object System.Windows.Forms.ProgressBar
-        $progressBar.Location = New-Object System.Drawing.Point(82, 72)
-        $progressBar.Size = New-Object System.Drawing.Size($formW - 140, 22)
-        $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-        $progressBar.MarqueeAnimationSpeed = 25
-        $panelHeader.Controls.Add($progressBar)
+        # 2-Panel Custom Sliding Progress Bar (100% theme-independent & color-coded)
+        $trackW = $formW - 140
+        $trackH = 22
+        $fillW = [Math]::Max(40, [int]($trackW * 0.28))
+
+        $progressTrack = New-Object System.Windows.Forms.Panel
+        $progressTrack.Location = New-Object System.Drawing.Point(82, 72)
+        $progressTrack.Size = New-Object System.Drawing.Size($trackW, $trackH)
+        $progressTrack.BackColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
+        $progressTrack.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+        $panelHeader.Controls.Add($progressTrack)
+
+        $progressFill = New-Object System.Windows.Forms.Panel
+        $progressFill.Location = New-Object System.Drawing.Point(0, 0)
+        $progressFill.Size = New-Object System.Drawing.Size($fillW, $trackH)
+        $progressFill.BackColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
+        $progressTrack.Controls.Add($progressFill)
 
         # Terminal Header Panel
         $panelTermHeader = New-Object System.Windows.Forms.Panel
@@ -775,6 +812,10 @@ function Start-GlazierDeploymentGUI {
         $btnReboot.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
         $btnReboot.Visible = $false
         $btnReboot.Add_Click({
+            if ($bgForm -and -not $bgForm.IsDisposed) {
+                $bgForm.Close()
+                $bgForm.Dispose()
+            }
             if ($isWinPE) {
                 & "$env:SystemRoot\System32\wpeutil.exe" reboot
             } else {
@@ -819,15 +860,6 @@ function Start-GlazierDeploymentGUI {
         $form.Show()
         [System.Windows.Forms.Application]::DoEvents()
 
-        if ([System.Windows.Forms.Application]::RenderWithVisualStyles) {
-            [void][Win32WindowHelper]::SendMessage($progressBar.Handle, 0x040A, [IntPtr]1, [IntPtr]25) # PBM_SETMARQUEE
-        } else {
-            $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-            $progressBar.Minimum = 0
-            $progressBar.Maximum = 100
-            $progressBar.Value = 10
-        }
-
         # Set up streaming output paths in $env:TEMP
         $stdoutLog = "$env:TEMP\glazier_stdout.log"
         $stderrLog = "$env:TEMP\glazier_stderr.log"
@@ -857,6 +889,7 @@ function Start-GlazierDeploymentGUI {
         $script:totalPhaseTasks = 0
         $script:lastGlazierError = ""
         $script:lastLogLine = ""
+        $script:barPos = 0
         $pulseFrames = @("[.  ]", "[.. ]", "[...]", "[ ..]", "[  .]", "[   ]")
         $pulseIdx = 0
 
@@ -867,16 +900,16 @@ function Start-GlazierDeploymentGUI {
                 $pulseIdx = ($pulseIdx + 1) % $pulseFrames.Length
                 $lblBadge.Text = $pulseFrames[$pulseIdx]
 
-                if (-not [System.Windows.Forms.Application]::RenderWithVisualStyles) {
-                    $progressBar.Value = ($progressBar.Value + 4) % 100
-                    if ($progressBar.Value -eq 0) { $progressBar.Value = 4 }
-                }
+                # Slide the custom progress bar smoothly
+                $script:barPos = ($script:barPos + 18) % ($trackW + $fillW)
+                $progressFill.Left = $script:barPos - $fillW
 
                 $chunk = $outReader.ReadToEnd()
                 if ($chunk) {
-                    $txtOutput.AppendText($chunk)
+                    $cleanChunk = [regex]::Replace($chunk, "\r\n|\r|\n", "`r`n")
+                    $txtOutput.AppendText($cleanChunk)
                     $hasNewText = $true
-                    foreach ($line in ($chunk -split "`r?`n")) {
+                    foreach ($line in ($cleanChunk -split "`r?`n")) {
                         $tLine = $line.Trim()
                         if ($tLine) {
                             $script:lastLogLine = $tLine
@@ -889,9 +922,10 @@ function Start-GlazierDeploymentGUI {
 
                 $errChunk = $errReader.ReadToEnd()
                 if ($errChunk) {
-                    $txtOutput.AppendText($errChunk)
+                    $cleanErr = [regex]::Replace($errChunk, "\r\n|\r|\n", "`r`n")
+                    $txtOutput.AppendText($cleanErr)
                     $hasNewText = $true
-                    foreach ($line in ($errChunk -split "`r?`n")) {
+                    foreach ($line in ($cleanErr -split "`r?`n")) {
                         $tLine = $line.Trim()
                         if ($tLine) {
                             $script:lastLogLine = $tLine
@@ -919,8 +953,9 @@ function Start-GlazierDeploymentGUI {
             # Drain any remaining bytes after exit
             $finalOut = $outReader.ReadToEnd()
             if ($finalOut) {
-                $txtOutput.AppendText($finalOut)
-                foreach ($line in ($finalOut -split "`r?`n")) {
+                $cleanFinalOut = [regex]::Replace($finalOut, "\r\n|\r|\n", "`r`n")
+                $txtOutput.AppendText($cleanFinalOut)
+                foreach ($line in ($cleanFinalOut -split "`r?`n")) {
                     if ($line -match 'CRITICAL|Error Code|Exception|Error encountered|FAILED') {
                         $script:lastGlazierError = $line.Trim()
                     }
@@ -928,8 +963,9 @@ function Start-GlazierDeploymentGUI {
             }
             $finalErr = $errReader.ReadToEnd()
             if ($finalErr) {
-                $txtOutput.AppendText($finalErr)
-                foreach ($line in ($finalErr -split "`r?`n")) {
+                $cleanFinalErr = [regex]::Replace($finalErr, "\r\n|\r|\n", "`r`n")
+                $txtOutput.AppendText($cleanFinalErr)
+                foreach ($line in ($cleanFinalErr -split "`r?`n")) {
                     if ($line -match 'CRITICAL|Error Code|Exception|Error encountered|FAILED') {
                         $script:lastGlazierError = $line.Trim()
                     }
@@ -952,15 +988,22 @@ function Start-GlazierDeploymentGUI {
             $lblBadge.ForeColor = [System.Drawing.Color]::White
             $lblTitle.Text = "Stage Complete - Rebooting..."
             $lblStage.Text = "Glazier tasks completed successfully. Rebooting system..."
-            $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Blocks
-            $progressBar.Value = 100
+            $progressFill.Location = New-Object System.Drawing.Point(0, 0)
+            $progressFill.Size = New-Object System.Drawing.Size($trackW, $trackH)
+            $progressFill.BackColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
 
             for ($sec = 0; $sec -lt 30; $sec++) {
                 [System.Windows.Forms.Application]::DoEvents()
                 Start-Sleep -Milliseconds 100
             }
+            if ($bgForm -and -not $bgForm.IsDisposed) {
+                $bgForm.Close()
+                $bgForm.Dispose()
+            }
             $form.Close()
             $form.Dispose()
+            try { $script:glazierMutex.ReleaseMutex() } catch {}
+            [Environment]::Exit(0)
         } else {
             $panelHeader.BackColor = [System.Drawing.Color]::FromArgb(254, 226, 226)
             $lblBadge.Text = "[!]"
@@ -972,8 +1015,9 @@ function Start-GlazierDeploymentGUI {
             } else {
                 $lblStage.Text = "An error occurred during deployment. Take a photo of this screen and send to IT Support."
             }
-            $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Blocks
-            $progressBar.Value = 100
+            $progressFill.Location = New-Object System.Drawing.Point(0, 0)
+            $progressFill.Size = New-Object System.Drawing.Size($trackW, $trackH)
+            $progressFill.BackColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
             $btnReboot.Visible = $true
             [void][Win32WindowHelper]::SendMessage($txtOutput.Handle, 0x0115, [IntPtr]7, [IntPtr]::Zero)
 
@@ -982,6 +1026,11 @@ function Start-GlazierDeploymentGUI {
                 [System.Windows.Forms.Application]::DoEvents()
                 Start-Sleep -Milliseconds 100
             }
+            if ($bgForm -and -not $bgForm.IsDisposed) {
+                $bgForm.Close()
+                $bgForm.Dispose()
+            }
+            try { $script:glazierMutex.ReleaseMutex() } catch {}
         }
     } catch {
         Write-Host "Warning: Glazier Deployment GUI error: $_" -ForegroundColor Yellow

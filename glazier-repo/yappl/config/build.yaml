@@ -54,7 +54,7 @@ controls:
 # Copy files from WinPE to the host for later use                                               #
 #################################################################################################
 
-- PSCommand: ['mkdir C:\glazier_cache']
+- MkDir: ['C:\glazier_cache']
 
 - CopyDir: ['X:\Python', 'C:\Python', true]
 - CopyDir: ['X:\glazier', 'C:\glazier', true]
@@ -149,6 +149,10 @@ controls:
 #################################################################################################
 
 - MultiPSCommand: [
+  ['& C:\Windows\System32\reg.exe delete "HKCU\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" /v Shell /f 2>$null'],
+  ['& C:\Windows\System32\reg.exe add "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v NoLogoff /t REG_DWORD /d 0 /f'],
+  ['& C:\Windows\System32\reg.exe add "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableChangePassword /t REG_DWORD /d 0 /f'],
+  ['& C:\Windows\System32\reg.exe add "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableLockWorkstation /t REG_DWORD /d 0 /f'],
   ['& C:\Windows\System32\reg.exe delete HKLM\SYSTEM\Setup /v UnattendFile /f'],
 ]
 

@@ -1064,13 +1064,23 @@ $lblStatus.Location = New-Object System.Drawing.Point(28, 64)
 $lblStatus.Size = New-Object System.Drawing.Size(564, 28)
 $form.Controls.Add($lblStatus)
 
-# Progress Bar: Location = (28, 100), Size = (564, 26)
-$progressBar = New-Object System.Windows.Forms.ProgressBar
-$progressBar.Location = New-Object System.Drawing.Point(28, 100)
-$progressBar.Size = New-Object System.Drawing.Size(564, 26)
-$progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-$progressBar.MarqueeAnimationSpeed = 25
-$form.Controls.Add($progressBar)
+# 2-Panel Custom Sliding Progress Bar (100% theme-independent & color-coded)
+$trackW = 564
+$trackH = 26
+$fillW = [Math]::Max(40, [int]($trackW * 0.28))
+
+$progressTrack = New-Object System.Windows.Forms.Panel
+$progressTrack.Location = New-Object System.Drawing.Point(28, 100)
+$progressTrack.Size = New-Object System.Drawing.Size($trackW, $trackH)
+$progressTrack.BackColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
+$progressTrack.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+$form.Controls.Add($progressTrack)
+
+$progressFill = New-Object System.Windows.Forms.Panel
+$progressFill.Location = New-Object System.Drawing.Point(0, 0)
+$progressFill.Size = New-Object System.Drawing.Size($fillW, $trackH)
+$progressFill.BackColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
+$progressTrack.Controls.Add($progressFill)
 
 # Detail / Sub-status Label: Location = (28, 134), Size = (564, 24)
 $lblDetail = New-Object System.Windows.Forms.Label
@@ -1159,20 +1169,11 @@ function Set-Step {
 try {
     $form.Show()
     [System.Windows.Forms.Application]::DoEvents()
-    if ([System.Windows.Forms.Application]::RenderWithVisualStyles) {
-        [void][Win32Window]::SendMessage($progressBar.Handle, 0x040A, [IntPtr]1, [IntPtr]25) # PBM_SETMARQUEE
-    } else {
-        $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-        $progressBar.Minimum = 0
-        $progressBar.Maximum = 100
-        $progressBar.Value = 10
-    }
 
+    $script:barPos = 0
     function Pulse-Progress {
-        if (-not [System.Windows.Forms.Application]::RenderWithVisualStyles) {
-            $progressBar.Value = ($progressBar.Value + 4) % 100
-            if ($progressBar.Value -eq 0) { $progressBar.Value = 4 }
-        }
+        $script:barPos = ($script:barPos + 18) % ($trackW + $fillW)
+        $progressFill.Left = $script:barPos - $fillW
         [System.Windows.Forms.Application]::DoEvents()
     }
 
@@ -1327,9 +1328,12 @@ try {
     # Step 4: Hand-off
     Set-Step -Status "Step 4 of 4: Launching Glazier Profile Menu..." -Detail "Starting Glazier autobuild..."
     Add-Log -Message "Initialization complete. Handing off to autobuild.ps1..."
+    $progressFill.Location = New-Object System.Drawing.Point(0, 0)
+    $progressFill.Size = New-Object System.Drawing.Size($trackW, $trackH)
+    $progressFill.BackColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
 
     for ($t = 0; $t -lt 5; $t++) {
-        Pulse-Progress
+        [System.Windows.Forms.Application]::DoEvents()
         Start-Sleep -Milliseconds 100
     }
 } catch {
@@ -1354,7 +1358,7 @@ TITLE Glazier WinPE Initialization
 ECHO Glazier WinPE with OSDCloud {0}
 X:\Windows\System32\reg.exe import "X:\Windows\System32\WindowsPowerShell\v1.0\pwrshsip.reg" /reg:64 >nul 2>&1
 PowerShell -NoProfile -NoLogo -ExecutionPolicy Bypass -File "X:\Windows\System32\Initialize-GlazierWinPE.ps1"
-start PowerShell -NoProfile -NoLogo -WindowStyle Maximized -NoExit -File "X:\Windows\System32\autobuild.ps1" -config_server {1}
+start /wait PowerShell -NoProfile -NoLogo -WindowStyle Minimized -NoExit -File "X:\Windows\System32\autobuild.ps1" -config_server {1}
 "@ -f $osd_version, $config_server
 
 Write-Log "Writing Startnet.cmd to WinPE..."
@@ -1418,6 +1422,12 @@ if ($storage_upload_path -ne "") {
 
         Write-Log "Writing ISO to Cloud Storage at $storage_upload_path-$cnf.iso..."
         gsutil -m cp "C:\OSDCloud\OSDCloud.iso" "$storage_upload_path-$cnf.iso"
+
+        if ($cnf -eq "menu" -and $storage_boot_upload_path -ne "") {
+            Write-Log "Writing Menu WIM to $storage_boot_upload_path/sources/boot-menu.wim and $storage_boot_upload_path/sources/boot.wim..." -Color Green
+            gsutil -m cp "$WorkspacePath\Media\Sources\boot.wim" "$storage_boot_upload_path/sources/boot-menu.wim"
+            gsutil -m cp "$WorkspacePath\Media\Sources\boot.wim" "$storage_boot_upload_path/sources/boot.wim"
+        }
     }
 }
 

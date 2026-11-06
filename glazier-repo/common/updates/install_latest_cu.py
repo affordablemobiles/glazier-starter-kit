@@ -25,16 +25,33 @@ for glazier_path in (r'X:\glazier', r'C:\glazier'):
   if os.path.isdir(glazier_path) and glazier_path not in sys.path:
     sys.path.insert(0, glazier_path)
 
+from glazier.lib import buildinfo
+from glazier.lib import download
+from glazier.lib import logs
+from glazier.lib.actions import updates
+
 try:
   from absl import flags  # pylint: disable=g-import-not-at-top
-  if not flags.FLAGS.is_parsed():
-    flags.FLAGS(sys.argv[:1], known_only=True)
+  flags.FLAGS(sys.argv[:1], known_only=True)
 except Exception:  # pylint: disable=broad-except
   pass
 
-from glazier.lib import buildinfo
-from glazier.lib import logs
-from glazier.lib.actions import updates
+# Throttle BaseDownloader._DownloadChunkReport to 10% newline-terminated milestones
+def _clean_chunk_report(self, bytes_so_far: int, total_size: int):
+  if total_size <= 0:
+    return
+  pct = int((float(bytes_so_far) / total_size) * 100)
+  bucket = (pct // 10) * 10
+  last_bucket = getattr(self, '_last_pct_bucket', -1)
+  if bucket != last_bucket or bytes_so_far >= total_size:
+    self._last_pct_bucket = bucket
+    logging.info(
+        'Download progress: %s / %s (%d%%)',
+        self._ConvertBytes(bytes_so_far),
+        self._ConvertBytes(total_size),
+        pct,
+    )
+download.BaseDownloader._DownloadChunkReport = _clean_chunk_report
 
 logging = logs.logging
 
@@ -353,13 +370,6 @@ def main():
       datefmt='%H:%M:%S',
   )
 
-  try:
-    from absl import flags  # pylint: disable=g-import-not-at-top
-    if not flags.FLAGS.is_parsed():
-      flags.FLAGS(sys.argv[:1], known_only=True)
-  except ImportError:
-    pass
-
   parser = argparse.ArgumentParser(
       description='Resolve and install latest Windows Cumulative Update via Glazier UpdateMSU.'
   )
@@ -406,6 +416,11 @@ def main():
       len(msu_args),
   )
   bi = buildinfo.BuildInfo()
+  bi.ReleasePath = lambda: 'https://catalog.update.microsoft.com'
+  bi.BinaryPath = lambda: 'https://catalog.update.microsoft.com/'
+  bi.Branch = lambda: 'stable'
+  bi.ActiveConfigPath = lambda *a, **kw: []
+
   um = updates.UpdateMSU(msu_args, bi)
   um.Validate()
   um.Run()
