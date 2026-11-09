@@ -1099,6 +1099,7 @@ function Show-GlazierNetworkGUI {
         $btnConnect.ForeColor = [System.Drawing.Color]::White
         $btnConnect.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
         $btnConnect.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(29, 78, 216)
+        $btnConnect.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(29, 78, 216)
         $form.Controls.Add($btnConnect)
 
         $btnRefresh = New-Object System.Windows.Forms.Button
@@ -1110,6 +1111,7 @@ function Show-GlazierNetworkGUI {
         $btnRefresh.ForeColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
         $btnRefresh.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
         $btnRefresh.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(203, 213, 225)
+        $btnRefresh.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
         $form.Controls.Add($btnRefresh)
 
         $lblWiFiStatus = New-Object System.Windows.Forms.Label
@@ -1125,6 +1127,26 @@ function Show-GlazierNetworkGUI {
                 $txtPassword.PasswordChar = [char]0
             } else {
                 $txtPassword.PasswordChar = '*'
+            }
+        })
+
+        $txtPassword.Add_KeyDown({
+            param($sender, $e)
+            if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Enter) {
+                $e.SuppressKeyPress = $true
+                $btnConnect.PerformClick()
+            }
+        })
+
+        $listView.Add_DoubleClick({
+            if ($listView.SelectedItems.Count -gt 0) {
+                $sel = $listView.SelectedItems[0]
+                $netInfo = $sel.Tag
+                if ($netInfo -and -not $netInfo.SecurityEnabled) {
+                    $btnConnect.PerformClick()
+                } else {
+                    $txtPassword.Focus()
+                }
             }
         })
 
@@ -1289,6 +1311,7 @@ function Show-GlazierNetworkGUI {
     $btnTerminal.ForeColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
     $btnTerminal.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
     $btnTerminal.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(203, 213, 225)
+    $btnTerminal.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
     $form.Controls.Add($btnTerminal)
 
     $btnSkip = New-Object System.Windows.Forms.Button
@@ -1300,6 +1323,7 @@ function Show-GlazierNetworkGUI {
     $btnSkip.ForeColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
     $btnSkip.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
     $btnSkip.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(203, 213, 225)
+    $btnSkip.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
     $form.Controls.Add($btnSkip)
 
     $btnContinue = New-Object System.Windows.Forms.Button
@@ -1311,6 +1335,7 @@ function Show-GlazierNetworkGUI {
     $btnContinue.ForeColor = [System.Drawing.Color]::White
     $btnContinue.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
     $btnContinue.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(29, 78, 216)
+    $btnContinue.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(29, 78, 216)
     $btnContinue.Enabled = $false
     $form.Controls.Add($btnContinue)
 
@@ -1487,6 +1512,8 @@ function Show-GlazierNetworkGUI {
             $progressPulse.Visible = $false
             $btnContinue.Enabled = $true
             $btnContinue.BackColor = [System.Drawing.Color]::FromArgb(16, 185, 129)
+            $btnContinue.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(5, 150, 105)
+            $btnContinue.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(5, 150, 105)
 
             if (-not $script:hasStartedCountdown) {
                 $script:hasStartedCountdown = $true
@@ -1513,6 +1540,8 @@ function Show-GlazierNetworkGUI {
                 $btnContinue.Enabled = $false
                 $btnContinue.Text = "Continue"
                 $btnContinue.BackColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
+                $btnContinue.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(29, 78, 216)
+                $btnContinue.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(29, 78, 216)
             }
             if ($curTel.WiredState -eq 'Amber') {
                 $lblSubtitle.Text = "Wired link up - acquiring DHCP lease..."
@@ -1541,6 +1570,14 @@ function Show-GlazierNetworkGUI {
         $timerPulse.Stop()
         $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
         $form.Close()
+    })
+
+    $form.Add_FormClosing({
+        param($sender, $e)
+        if ($form.DialogResult -ne [System.Windows.Forms.DialogResult]::OK -and
+            $form.DialogResult -ne [System.Windows.Forms.DialogResult]::Ignore) {
+            $e.Cancel = $true
+        }
     })
 
     $timer.Start()
