@@ -185,14 +185,6 @@ Import-Module MSCatalog -Force -ErrorAction SilentlyContinue
 $enableWinRE = ($use_winre -match '^(true|1|yes)$')
 $forceRefreshWinRE = ($refresh_winre -match '^(true|1|yes)$')
 
-# Always ensure WirelessConnect.exe is downloaded whenever WinRE is enabled
-$wirelessConnectUrl = "https://github.com/okieselbach/Helpers/raw/master/WirelessConnect/WirelessConnect/bin/Release/WirelessConnect.exe"
-$wirelessConnectExe = "$downloadDir\WirelessConnect.exe"
-if ($enableWinRE -and (-not (Test-Path $wirelessConnectExe))) {
-    Write-Log "Downloading WirelessConnect.exe for WinPE Wi-Fi GUI..."
-    Invoke-DownloadWithRetry -Url $wirelessConnectUrl -OutFile $wirelessConnectExe
-}
-
 # If WinRE is requested, prepare and service WinRE.wim FIRST, then place it in the ADK directory
 # so New-OSDCloudTemplate builds directly on top of WinRE (preserving both Wi-Fi and all ADK packages)
 if ($enableWinRE) {
@@ -370,8 +362,8 @@ if ($enableWinRE) {
             Write-Log "No newer Safe OS Dynamic Update found, using release WinRE."
         }
 
-        # Mount base WinRE to slipstream updates, client WLAN DLLs, and WirelessConnect.exe
-        Write-Log "Servicing base Winre.wim (updates, client WLAN DLLs, and Wi-Fi GUI)..."
+        # Mount base WinRE to slipstream updates and client WLAN DLLs
+        Write-Log "Servicing base Winre.wim (updates and client WLAN DLLs)..."
         $mountDir = "$downloadDir\winre_mount"
         New-Item -ItemType Directory -Path $mountDir -Force | Out-Null
         Mount-WindowsImage -ImagePath $extractedWinRE -Index 1 -Path $mountDir
@@ -384,12 +376,6 @@ if ($enableWinRE) {
         if (Test-Path "$dllExtractDir") {
             Write-Log "Injecting client WLAN DLLs into base WinRE..."
             robocopy "$dllExtractDir" "$mountDir\Windows\System32" dmcmnutils.dll mdmpostprocessevaluator.dll mdmregistration.dll /ndl /njh /njs /b /np | Out-Null
-        }
-
-        if (Test-Path "$wirelessConnectExe") {
-            Write-Log "Injecting WirelessConnect.exe into base WinRE..."
-            Copy-Item -Path "$wirelessConnectExe" -Destination "$mountDir\Windows\WirelessConnect.exe" -Force
-            Copy-Item -Path "$wirelessConnectExe" -Destination "$mountDir\Windows\System32\WirelessConnect.exe" -Force
         }
 
         Write-Log "Performing DISM component cleanup on base WinRE..."
@@ -567,9 +553,6 @@ $editParams = @{
     CloudDriver     = @('IntelNet', 'USB', 'LenovoDock')
     PSModuleInstall = @('MSCatalog')
 }
-if ($enableWinRE) {
-    $editParams['WirelessConnect'] = $true
-}
 $wallpaperPath = "$scriptPath\wallpaper.jpg"
 $tempLogoPng   = "$downloadDir\logo.png"
 $convertedJpg  = "$downloadDir\logo_wallpaper.jpg"
@@ -695,17 +678,11 @@ robocopy "C:\Program Files\WindowsPowerShell\Modules\PowerShellGet\" "$MountPath
 robocopy "C:\Program Files\WindowsPowerShell\Modules\OSD\" "$MountPath\Program Files\WindowsPowerShell\Modules\OSD\" /E /PURGE /ndl /njh /njs /np | Out-Null
 robocopy "C:\Program Files\WindowsPowerShell\Modules\MSCatalog\" "$MountPath\Program Files\WindowsPowerShell\Modules\MSCatalog\" /E /PURGE /ndl /njh /njs /np | Out-Null
 
-# Copy client WLAN DLLs and WirelessConnect.exe to WinPE if WinRE mode
+# Copy client WLAN DLLs to WinPE if WinRE mode
 if ($enableWinRE) {
     if (Test-Path "$downloadDir\wlan_dlls") {
         Write-Log "Copying Windows 11 client WLAN DLLs to $MountPath\Windows\System32\..."
         robocopy "$downloadDir\wlan_dlls" "$MountPath\Windows\System32" dmcmnutils.dll mdmpostprocessevaluator.dll mdmregistration.dll /ndl /njh /njs /b /np | Out-Null
-    }
-    if (Test-Path "$downloadDir\WirelessConnect.exe") {
-        Write-Log "Copying WirelessConnect.exe to $MountPath\Windows\, System32\, and glazier-resources\..."
-        Copy-Item -Path "$downloadDir\WirelessConnect.exe" -Destination "$MountPath\Windows\WirelessConnect.exe" -Force
-        Copy-Item -Path "$downloadDir\WirelessConnect.exe" -Destination "$MountPath\Windows\System32\WirelessConnect.exe" -Force
-        Copy-Item -Path "$downloadDir\WirelessConnect.exe" -Destination "$MountPath\glazier-resources\WirelessConnect.exe" -Force
     }
 }
 
@@ -945,6 +922,10 @@ Copy-Item -Path $wallpaperScriptPath -Destination "$MountPath\glazier-resources\
 if (Test-Path "$scriptPath\..\glazier-resources\GlazierDeploymentGUI.ps1") {
     Copy-Item -Path "$scriptPath\..\glazier-resources\GlazierDeploymentGUI.ps1" -Destination "$MountPath\glazier-resources\GlazierDeploymentGUI.ps1" -Force
     Copy-Item -Path "$scriptPath\..\glazier-resources\GlazierDeploymentGUI.ps1" -Destination "$MountPath\Windows\System32\GlazierDeploymentGUI.ps1" -Force
+}
+if (Test-Path "$scriptPath\..\glazier-resources\GlazierWiFi.ps1") {
+    Copy-Item -Path "$scriptPath\..\glazier-resources\GlazierWiFi.ps1" -Destination "$MountPath\glazier-resources\GlazierWiFi.ps1" -Force
+    Copy-Item -Path "$scriptPath\..\glazier-resources\GlazierWiFi.ps1" -Destination "$MountPath\Windows\System32\GlazierWiFi.ps1" -Force
 }
 
 Write-Log "Writing Initialize-GlazierWinPE.ps1 (Boot Progress GUI) to System32..." -Color Cyan
@@ -1238,118 +1219,52 @@ try {
         try { & $wallpaperScript } catch {}
     }
 
-    # Step 2: Zero-Dependency Network Detection & Polling
+    # Step 2: Native WLAN & Network Telemetry Auto-Connect / GUI
     $progressFill.Width = [int]($trackW * 0.50)
     Set-Step -Status "Step 2 of 4: Checking network connectivity..." -Detail "Checking network interfaces..."
 
-    # Start WlanSvc if present and not running
-    $wlanSvc = Get-Service -Name WlanSvc -ErrorAction SilentlyContinue
-    if ($wlanSvc) {
-        if ($wlanSvc.Status -ne 'Running') {
-            Add-Log -Message "Starting WLAN AutoConfig service (WlanSvc)..." -Detail "Starting WlanSvc..."
-            Start-Service -Name WlanSvc -ErrorAction SilentlyContinue
-        } else {
-            Add-Log -Message "WLAN AutoConfig service (WlanSvc) is already running."
-        }
+    $wifiScriptCandidates = @(
+        "$env:SystemRoot\System32\GlazierWiFi.ps1",
+        "X:\Windows\System32\GlazierWiFi.ps1",
+        "X:\glazier-resources\GlazierWiFi.ps1",
+        "$PSScriptRoot\GlazierWiFi.ps1"
+    )
+    $wifiScript = $wifiScriptCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($wifiScript) {
+        . $wifiScript
     }
 
-    # Auto-import host-staged Wi-Fi profiles into WinPE RAM (X:\glazier-resources\wifi_profiles)
-    $wifiRamDir = "X:\glazier-resources\wifi_profiles"
-    if (-not (Test-Path $wifiRamDir)) {
-        New-Item -ItemType Directory -Path $wifiRamDir -Force | Out-Null
-    }
-
-    try {
-        $candidateDrives = [System.IO.DriveInfo]::GetDrives() | Where-Object { $_.IsReady -and $_.Name -ne 'X:\' }
-        foreach ($cDrive in $candidateDrives) {
-            $stagedSourcesDir = Join-Path $cDrive.RootDirectory.FullName "sources\wifi_profiles"
-            if (Test-Path $stagedSourcesDir) {
-                $stagedXmls = Get-ChildItem -Path $stagedSourcesDir -Filter "*.xml" -ErrorAction SilentlyContinue
-                if ($stagedXmls) {
-                    foreach ($sXml in $stagedXmls) {
-                        Copy-Item -Path $sXml.FullName -Destination $wifiRamDir -Force -ErrorAction SilentlyContinue
-                    }
-                }
-            }
-        }
-    } catch {
-        Add-Log -Message "Warning: Failed scanning drives for staged Wi-Fi profiles: $_"
-    }
-
-    $stagedProfiles = Get-ChildItem -Path $wifiRamDir -Filter "*.xml" -ErrorAction SilentlyContinue
-    if ($stagedProfiles) {
-        Add-Log -Message "Found $($stagedProfiles.Count) staged Wi-Fi profile(s). Waiting for wireless adapter..." -Detail "Configuring Wi-Fi..."
-        for ($wWait = 1; $wWait -le 10; $wWait++) {
-            $wlanIfaces = (& netsh.exe wlan show interfaces 2>$null) -join "`n"
-            if ($wlanIfaces -match 'Name\s*:') { break }
-            for ($tick = 0; $tick -lt 10; $tick++) {
-                Pulse-Progress
-                Start-Sleep -Milliseconds 100
-            }
-        }
-
-        foreach ($pf in $stagedProfiles) {
-            & netsh.exe wlan add profile filename="$($pf.FullName)" user=all | Out-Null
-            try {
-                [xml]$px = Get-Content -Path $pf.FullName -ErrorAction SilentlyContinue
-                $pn = if ($px -and $px.WLANProfile) { $px.WLANProfile.name } else { $pf.BaseName }
-                if ($pn) {
-                    & netsh.exe wlan connect name="$pn" | Out-Null
-                    Add-Log -Message "Connected to Wi-Fi network: $pn" -Detail "Connecting to $pn..."
-                }
-            } catch {
-                Add-Log -Message "Warning: Failed to connect Wi-Fi profile $($pf.Name): $_"
-            }
-        }
-    }
-
-    # Poll Test-WinPENetwork every 1 second for up to 15 seconds
-    $activeNet = $null
-    $maxPollSeconds = 15
-    for ($sec = 1; $sec -le $maxPollSeconds; $sec++) {
+    $connected = $false
+    if (Get-Command Invoke-GlazierWiFiAutoConnect -ErrorAction SilentlyContinue) {
+        Add-Log -Message "Running Glazier Wi-Fi & Wired auto-connect pre-check..." -Detail "Checking network..."
+        $connected = Invoke-GlazierWiFiAutoConnect `
+            -ProfileDirs @("X:\glazier-resources\wifi_profiles", "C:\glazier-resources\wifi_profiles") `
+            -OnStatus { param($msg) Add-Log -Message $msg -Detail $msg } `
+            -OnPulse { Pulse-Progress } `
+            -TimeoutSeconds 20
+    } else {
         $activeNet = Test-WinPENetwork
-        if ($activeNet) {
-            Add-Log -Message "Network interface active: $($activeNet.Name) ($($activeNet.Interface)) with IP $($activeNet.IPAddress)" -Detail "Connected: $($activeNet.IPAddress)"
-            break
-        }
-        Add-Log -Message "Waiting for active IPv4 connection (Attempt $sec of $maxPollSeconds)..." -Detail "Waiting for network link ($sec/$maxPollSeconds)..."
-        for ($tick = 0; $tick -lt 10; $tick++) {
-            Pulse-Progress
-            Start-Sleep -Milliseconds 100
-        }
+        if ($activeNet) { $connected = $true }
     }
 
-    if (-not $activeNet) {
-        Add-Log -Message "No wired network detected. Launching Wi-Fi setup..." -Detail "Launching Wi-Fi setup..."
-        $wcPaths = @(
-            "$env:SystemRoot\System32\WirelessConnect.exe",
-            "$env:SystemRoot\WirelessConnect.exe",
-            "X:\Windows\System32\WirelessConnect.exe",
-            "X:\Windows\WirelessConnect.exe"
-        )
-        $wcExe = $wcPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
-        if ($wcExe) {
-            $form.TopMost = $false
-            [System.Windows.Forms.Application]::DoEvents()
-            Start-Process -FilePath $wcExe -Wait
-            $form.TopMost = $true
-            [System.Windows.Forms.Application]::DoEvents()
-
-            Add-Log -Message "Wi-Fi setup utility closed. Waiting up to 10 seconds for DHCP lease..." -Detail "Waiting for Wi-Fi DHCP lease..."
-            for ($wSec = 1; $wSec -le 10; $wSec++) {
-                $activeNet = Test-WinPENetwork
-                if ($activeNet) {
-                    Add-Log -Message "Network connected: $($activeNet.Name) with IP $($activeNet.IPAddress)" -Detail "Connected: $($activeNet.IPAddress)"
-                    break
-                }
-                for ($tick = 0; $tick -lt 10; $tick++) {
-                    Pulse-Progress
-                    Start-Sleep -Milliseconds 100
-                }
+    if (-not $connected) {
+        Add-Log -Message "Network connection not yet established. Opening Network & Wi-Fi configuration dialog..." -Detail "Opening Network GUI..."
+        $form.TopMost = $false
+        [System.Windows.Forms.Application]::DoEvents()
+        if (Get-Command Show-GlazierNetworkGUI -ErrorAction SilentlyContinue) {
+            $guiResult = Show-GlazierNetworkGUI
+            if ($guiResult) {
+                $connected = $true
             }
-        } else {
-            Add-Log -Message "WirelessConnect.exe not found on system." -Detail "No Wi-Fi setup utility found."
         }
+        $form.TopMost = $true
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+
+    if ($connected) {
+        Add-Log -Message "Network connectivity established." -Detail "Network ready."
+    } else {
+        Add-Log -Message "Warning: Continuing without verified network connection." -Detail "Continuing..."
     }
 
     # Export active Wi-Fi profile(s) with cleartext keys to X:\glazier-resources\wifi_profiles for carry-over to Windows

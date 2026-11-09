@@ -45,6 +45,10 @@ SYNCED_FILE_PAIRS = [
         'glazier-repo/glazier-resources/GlazierDeploymentGUI.ps1',
     ),
     (
+        'glazier-resources/GlazierWiFi.ps1',
+        'glazier-repo/glazier-resources/GlazierWiFi.ps1',
+    ),
+    (
         'glazier-resources/Stage-GlazierWifiProfiles.ps1',
         'glazier-repo/glazier-resources/Stage-GlazierWifiProfiles.ps1',
     ),

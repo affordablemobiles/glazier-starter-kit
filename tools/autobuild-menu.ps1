@@ -158,6 +158,17 @@ public class Win32WindowHelper {
 }
 "@ -ErrorAction SilentlyContinue
 
+$wifiCandidates = @(
+    "X:\glazier-resources\GlazierWiFi.ps1",
+    "C:\glazier-resources\GlazierWiFi.ps1",
+    "$env:SystemRoot\System32\GlazierWiFi.ps1",
+    "$PSScriptRoot\GlazierWiFi.ps1"
+)
+$wifiScript = $wifiCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($wifiScript) {
+    . $wifiScript
+}
+
 # Ensure core fonts are loaded into the live GDI session
 $fontsDir = "$env:SystemRoot\Fonts"
 $fontFiles = @("segoeui.ttf", "segoeuib.ttf", "segoeuii.ttf", "seguisb.ttf", "consola.ttf", "consolab.ttf")
@@ -1257,77 +1268,51 @@ function Start-GlazierDeploymentGUI {
             }
         } else {
             $wifiDir = "C:\glazier-resources\wifi_profiles"
-            if (Test-Path $wifiDir) {
-                try {
-                    Start-Service -Name WlanSvc -ErrorAction SilentlyContinue
-                    # Wait up to 10 seconds for WlanSvc to initialize and enumerate wireless interface
-                    for ($wInit = 1; $wInit -le 10; $wInit++) {
-                        $wlanIfaces = (& netsh.exe wlan show interfaces 2>$null) -join "`n"
-                        if ($wlanIfaces -match 'Name\s*:') { break }
-                        $script:shimmerPos = ($script:shimmerPos + 16)
-                        if ($script:shimmerPos -gt ($progressFill.Width + 70)) { $script:shimmerPos = -70 }
-                        $progressPulse.Left = $script:shimmerPos
-                        [System.Windows.Forms.Application]::DoEvents()
-                        Start-Sleep -Milliseconds 1000
-                    }
+            $netConnected = $false
 
-                    $pFiles = Get-ChildItem -Path $wifiDir -Filter "*.xml" -ErrorAction SilentlyContinue
-                    foreach ($pf in $pFiles) {
-                        & netsh.exe wlan add profile filename="$($pf.FullName)" user=all | Out-Null
-                        if ($LASTEXITCODE -eq 0) {
-                            try {
-                                [xml]$px = Get-Content -Path $pf.FullName -ErrorAction SilentlyContinue
-                                $pn = if ($px -and $px.WLANProfile) { $px.WLANProfile.name } else { $pf.BaseName }
-                                if ($pn) {
-                                    & netsh.exe wlan connect name="$pn" | Out-Null
-                                }
-                            } catch {}
-                            Remove-Item -Path $pf.FullName -Force -ErrorAction SilentlyContinue
-                        }
-                    }
-                    $remainingXml = Get-ChildItem -Path $wifiDir -Filter "*.xml" -ErrorAction SilentlyContinue
-                    if (-not $remainingXml -or $remainingXml.Count -eq 0) {
-                        Remove-Item -Path $wifiDir -Recurse -Force -ErrorAction SilentlyContinue
-                    }
-                } catch {}
+            $pulseAction = {
+                $script:shimmerPos = ($script:shimmerPos + 16)
+                if ($script:shimmerPos -gt ($progressFill.Width + 70)) { $script:shimmerPos = -70 }
+                $progressPulse.Left = $script:shimmerPos
+                [System.Windows.Forms.Application]::DoEvents()
+            }
+            $statusAction = {
+                param($statusMsg)
+                $lblStage.Text = $statusMsg
+                [System.Windows.Forms.Application]::DoEvents()
             }
 
-            $netOk = Test-WinPENetwork
-            if (-not $netOk) {
+            if (Get-Command Invoke-GlazierWiFiAutoConnect -ErrorAction SilentlyContinue) {
+                $lblStage.Text = "Checking network connectivity in Windows..."
+                $netConnected = Invoke-GlazierWiFiAutoConnect `
+                    -ProfileDirs @($wifiDir) `
+                    -OnStatus $statusAction `
+                    -OnPulse $pulseAction `
+                    -TimeoutSeconds 20
+
+                if (-not $netConnected) {
+                    $form.TopMost = $false
+                    [System.Windows.Forms.Application]::DoEvents()
+                    if (Get-Command Show-GlazierNetworkGUI -ErrorAction SilentlyContinue) {
+                        $guiOk = Show-GlazierNetworkGUI
+                        if ($guiOk) { $netConnected = $true }
+                    }
+                    $form.TopMost = $isWinPE
+                    [System.Windows.Forms.Application]::DoEvents()
+                }
+            } else {
                 $lblStage.Text = "Waiting for network connection in Windows..."
                 for ($nSec = 1; $nSec -le 15; $nSec++) {
                     $netOk = Test-WinPENetwork
-                    if ($netOk) { break }
-                    $script:shimmerPos = ($script:shimmerPos + 16)
-                    if ($script:shimmerPos -gt ($progressFill.Width + 70)) { $script:shimmerPos = -70 }
-                    $progressPulse.Left = $script:shimmerPos
-                    [System.Windows.Forms.Application]::DoEvents()
+                    if ($netOk) { $netConnected = $true; break }
+                    & $pulseAction
                     Start-Sleep -Milliseconds 1000
                 }
-                if (-not $netOk) {
-                    $wcCands = @(
-                        "C:\glazier-resources\WirelessConnect.exe",
-                        "C:\Windows\System32\WirelessConnect.exe",
-                        "C:\Windows\WirelessConnect.exe"
-                    )
-                    $wcExe = $wcCands | Where-Object { Test-Path $_ } | Select-Object -First 1
-                    if ($wcExe) {
-                        $form.TopMost = $false
-                        [System.Windows.Forms.Application]::DoEvents()
-                        Start-Process -FilePath $wcExe -Wait
-                        $form.TopMost = $isWinPE
-                        [System.Windows.Forms.Application]::DoEvents()
-                        for ($wSec = 1; $wSec -le 10; $wSec++) {
-                            $netOk = Test-WinPENetwork
-                            if ($netOk) { break }
-                            $script:shimmerPos = ($script:shimmerPos + 16)
-                            if ($script:shimmerPos -gt ($progressFill.Width + 70)) { $script:shimmerPos = -70 }
-                            $progressPulse.Left = $script:shimmerPos
-                            [System.Windows.Forms.Application]::DoEvents()
-                            Start-Sleep -Milliseconds 1000
-                        }
-                    }
-                }
+            }
+
+            # Only delete C:\glazier-resources\wifi_profiles after connectivity is established
+            if ($netConnected -and (Test-Path $wifiDir)) {
+                Remove-Item -Path $wifiDir -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
 

@@ -343,7 +343,7 @@ def resolve_layered_msu_packages(
     kb_id_upper = kb_name.upper()
 
     # Per-layer skip checks:
-    # 1. Checkpoint KB5043080 for 24H2/25H2 where base ESD already has UBR >= 1742
+    # 1. Checkpoint KB5043080 for 24H2/25H2/26H2 where base ESD already has UBR >= 1742
     if kb_id_upper == 'KB5043080' and offline_ubr >= 1742:
       logging.info(
           'Skipping layer %s: already slipstreamed in base offline OS image (UBR %d >= 1742).',
@@ -427,7 +427,7 @@ def main():
       description='Resolve and install latest Windows Cumulative Update via Glazier UpdateMSU.'
   )
   parser.add_argument('--os-name', help='e.g. "Windows 11" or "Windows 10"')
-  parser.add_argument('--os-version', help='e.g. "25H2", "24H2", "23H2", "22H2"')
+  parser.add_argument('--os-version', help='e.g. "26H2", "25H2", "24H2", "23H2", "22H2"')
   parser.add_argument('--fallback-version', help='Optional fallback version (e.g. "24H2")')
   parser.add_argument('--arch', default='x64', help='Architecture (default: x64)')
   parser.add_argument('--target-drive', default=r'C:\\', help='Target drive of offline OS')
