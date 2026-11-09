@@ -927,10 +927,35 @@ if (Test-Path "$scriptPath\..\glazier-resources\GlazierWiFi.ps1") {
     Copy-Item -Path "$scriptPath\..\glazier-resources\GlazierWiFi.ps1" -Destination "$MountPath\glazier-resources\GlazierWiFi.ps1" -Force
     Copy-Item -Path "$scriptPath\..\glazier-resources\GlazierWiFi.ps1" -Destination "$MountPath\Windows\System32\GlazierWiFi.ps1" -Force
 }
+if (Test-Path "$scriptPath\..\glazier-resources\Initialize-GlazierWinPE.ps1") {
+    Copy-Item -Path "$scriptPath\..\glazier-resources\Initialize-GlazierWinPE.ps1" -Destination "$MountPath\glazier-resources\Initialize-GlazierWinPE.ps1" -Force
+    Copy-Item -Path "$scriptPath\..\glazier-resources\Initialize-GlazierWinPE.ps1" -Destination "$MountPath\Windows\System32\Initialize-GlazierWinPE.ps1" -Force
+}
 
 Write-Log "Writing Initialize-GlazierWinPE.ps1 (Boot Progress GUI) to System32..." -Color Cyan
 $initScriptPath = "$MountPath\Windows\System32\Initialize-GlazierWinPE.ps1"
 $initScriptContent = @'
+if (-not $env:GLAZIER_INIT_OVERRIDE) {
+    try {
+        $drvList = [System.IO.DriveInfo]::GetDrives() | Where-Object { $_.IsReady -and $_.Name -ne 'X:\' }
+        foreach ($d in $drvList) {
+            $ovrDir = Join-Path $d.RootDirectory.FullName "sources\override"
+            if (Test-Path $ovrDir) {
+                New-Item -ItemType Directory -Path "X:\glazier-resources" -Force | Out-Null
+                Get-ChildItem -Path $ovrDir -Filter "*.ps1" -ErrorAction SilentlyContinue | ForEach-Object {
+                    Copy-Item -Path $_.FullName -Destination "X:\Windows\System32\$($_.Name)" -Force -ErrorAction SilentlyContinue
+                    Copy-Item -Path $_.FullName -Destination "X:\glazier-resources\$($_.Name)" -Force -ErrorAction SilentlyContinue
+                }
+                if (Test-Path "$ovrDir\Initialize-GlazierWinPE.ps1") {
+                    $env:GLAZIER_INIT_OVERRIDE = "1"
+                    & "X:\Windows\System32\Initialize-GlazierWinPE.ps1"
+                    exit $LASTEXITCODE
+                }
+            }
+        }
+    } catch {}
+}
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
@@ -1392,6 +1417,7 @@ try {
 '@
 
 Set-Content -Path $initScriptPath -Value $initScriptContent -Encoding UTF8 -Force
+Copy-Item -Path $initScriptPath -Destination "$MountPath\glazier-resources\Initialize-GlazierWinPE.ps1" -Force
 
 $osd_version = (Get-InstalledModule -Name OSD).Version.ToString()
 Write-Log "Detected OSDCloud version $osd_version, writing to startup script..." -Color Green
