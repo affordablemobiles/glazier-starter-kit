@@ -1,6 +1,6 @@
 templates:
   osdcloud:
-    PSCommand: ['Start-OSDCloud -Firmware -SkipAutopilot -SkipODT -ZTI -OSVersion "Windows 11" -OSBuild "25H2" -OSEdition "Pro" -OSLanguage "en-gb" -OSLicense "Retail"']
+    PSCommand: ['Start-OSDCloud -Firmware -SkipAutopilot -SkipODT -ZTI -OSVersion "Windows 11" -OSBuild "26H2" -OSEdition "Pro" -OSLanguage "en-gb" -OSLicense "Retail"']
 
 controls:
 - SetTimer: ['winpe_start']
@@ -58,6 +58,7 @@ controls:
   - ['MGMT/mgmt-installer-amd64.exe', 'C:\MGMT\mgmt-installer-amd64.exe']
   - ['Office365/officedeploymenttool_20430-20146.exe', 'C:\MGMT\Temp\odt_installer.exe']
   - ['Office365/config.xml', 'C:\MGMT\Temp\odt\configuration.xml']
+  - ['Theme/apply_theme.ps1', 'C:\MGMT\Temp\apply_theme.ps1']
 
 
 #################################################################################################
@@ -127,6 +128,8 @@ controls:
 - PSCommand: ['& C:\MGMT\Temp\odt_installer.exe /extract:C:\MGMT\Temp\odt /quiet /norestart']
 
 - PSCommand: ['& C:\MGMT\Temp\odt\setup.exe /configure C:\MGMT\Temp\odt\configuration.xml']
+
+- PSScript: ['C:\MGMT\Temp\apply_theme.ps1']
 
 - PSCommand: ['& C:\MGMT\mgmt-installer-amd64.exe']
 

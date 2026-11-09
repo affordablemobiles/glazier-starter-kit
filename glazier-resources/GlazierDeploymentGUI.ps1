@@ -226,6 +226,8 @@ function Get-GlazierLiveProgress {
         $desc = "Applying Windows unattend specialization config..."
     } elseif ($body -match 'odt_installer|setup\.exe\s+/configure|Office365') {
         $desc = "Installing Microsoft Office 365..."
+    } elseif ($body -match 'apply_theme') {
+        $desc = "Applying corporate Windows 11 theme pack..."
     } elseif ($body -match 'GoogleChromeStandaloneEnterprise') {
         $desc = "Installing Google Chrome Enterprise..."
     } elseif ($body -match 'EndpointVerification') {
@@ -250,6 +252,8 @@ function Get-GlazierLiveProgress {
             $desc = "Installing Google Credential Provider for Windows (GCPW)..."
         } elseif ($CurrentLogChunk -match 'odt_installer|setup\.exe\s+/configure|Office365') {
             $desc = "Installing Microsoft Office 365..."
+        } elseif ($CurrentLogChunk -match 'apply_theme') {
+            $desc = "Applying corporate Windows 11 theme pack..."
         } elseif ($CurrentLogChunk -match 'mgmt-installer') {
             $desc = "Installing Enterprise Management Agent..."
         } elseif ($CurrentLogChunk -match 'stage_wifi_profiles|Stage-GlazierWifiProfiles') {

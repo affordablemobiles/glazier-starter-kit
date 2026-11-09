@@ -29,3 +29,6 @@ AutopilotConfigurationFile.json
 /glazier-repo/.env
 *.env
 !*.env.example
+
+# Custom / Private Theme Pack scripts
+/glazier-repo/*/config/Theme
