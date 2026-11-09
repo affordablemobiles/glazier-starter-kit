@@ -64,6 +64,7 @@ CATALOG_DIALOG_URL = 'https://www.catalog.update.microsoft.com/DownloadDialog.as
 
 # Build number to (OS Name, Primary Version, Fallback Version) mapping
 BUILD_MAP = {
+    '26300': ('Windows 11', '26H2', '25H2'),
     '26200': ('Windows 11', '25H2', '24H2'),
     '26100': ('Windows 11', '24H2', '25H2'),
     '22631': ('Windows 11', '23H2', '22H2'),

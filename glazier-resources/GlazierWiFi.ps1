@@ -529,16 +529,23 @@ $secXml
 function Test-GlazierInternetReachability {
     $endpoints = @('http://www.msftncsi.com/ncsi.txt', 'https://storage.googleapis.com')
     foreach ($url in $endpoints) {
+        $resp = $null
         try {
             $req = [System.Net.HttpWebRequest]::Create($url)
             $req.Method = "HEAD"
-            $req.Timeout = 2000
-            $req.ReadWriteTimeout = 2000
+            $req.Timeout = 1200
+            $req.ReadWriteTimeout = 1200
             $req.AllowAutoRedirect = $false
-            using ($resp = $req.GetResponse()) {
+            $resp = $req.GetResponse()
+            try {
                 $code = [int]$resp.StatusCode
                 if ($code -ge 200 -and $code -lt 500) {
                     return $true
+                }
+            } finally {
+                if ($resp) {
+                    try { $resp.Close() } catch {}
+                    try { $resp.Dispose() } catch {}
                 }
             }
         } catch [System.Net.WebException] {
@@ -635,27 +642,54 @@ function Get-GlazierNetworkTelemetry {
     } catch {}
 
     if (-not $hasHardware) {
-        try {
-            $pnpDevs = @(Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue)
-            if (-not $pnpDevs -or $pnpDevs.Count -eq 0) {
-                $pnpDevs = @(Get-WmiObject Win32_PnPEntity -ErrorAction SilentlyContinue)
-            }
-            foreach ($dev in $pnpDevs) {
-                $cids = "$($dev.CompatibleID -join ' ') $($dev.HardwareID -join ' ') $($dev.DeviceID)"
-                $devName = "$($dev.Name) $($dev.Description)"
-                if ($cids -match 'CC_0280|Class_E0' -or $devName -match 'Wi-Fi|Wireless|802\.11|WLAN') {
+        $now = [System.DateTime]::UtcNow
+        if ($script:cachedPnpWifi -and $script:cachedPnpWifiTime -and (($now - $script:cachedPnpWifiTime).TotalSeconds -lt 5)) {
+            $hasHardware = $script:cachedPnpWifi.HasHardware
+            $hasBoundDriver = $script:cachedPnpWifi.HasBoundDriver
+            $adapterName = $script:cachedPnpWifi.AdapterName
+            $errorCode = $script:cachedPnpWifi.ErrorCode
+        } else {
+            try {
+                $pnpDevs = @(Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue)
+                if (-not $pnpDevs -or $pnpDevs.Count -eq 0) {
+                    $pnpDevs = @(Get-WmiObject Win32_PnPEntity -ErrorAction SilentlyContinue)
+                }
+                $matchingDevs = @()
+                foreach ($dev in $pnpDevs) {
+                    $cids = "$($dev.CompatibleID -join ' ') $($dev.HardwareID -join ' ') $($dev.DeviceID)"
+                    $devName = "$($dev.Name) $($dev.Description)"
+                    if ($devName -match 'Bluetooth|Wi-Fi Direct|WAN Miniport|Virtual|Hyper-V|TAP|VPN|RasSstp|AgileVPN' -or
+                        $cids -match 'Bluetooth|Wi-Fi Direct|WAN Miniport|Virtual|Hyper-V|TAP|VPN|RasSstp|AgileVPN') {
+                        continue
+                    }
+                    if ($cids -match 'CC_0280' -or $devName -match 'Wi-Fi|Wireless|802\.11|WLAN') {
+                        $matchingDevs += $dev
+                    }
+                }
+                if ($matchingDevs.Count -gt 0) {
+                    $bestDev = $matchingDevs | Where-Object { [int]$_.ConfigManagerErrorCode -eq 0 } | Select-Object -First 1
+                    if (-not $bestDev) {
+                        $bestDev = $matchingDevs[0]
+                    }
                     $hasHardware = $true
-                    $adapterName = $dev.Name
-                    $errorCode = [int]$dev.ConfigManagerErrorCode
+                    $adapterName = $bestDev.Name
+                    $errorCode = [int]$bestDev.ConfigManagerErrorCode
                     if ($errorCode -eq 0) {
                         $hasBoundDriver = $true
                     } else {
                         $hasBoundDriver = $false
                     }
-                    break
                 }
+            } catch {}
+
+            $script:cachedPnpWifi = [PSCustomObject]@{
+                HasHardware    = $hasHardware
+                HasBoundDriver = $hasBoundDriver
+                AdapterName    = $adapterName
+                ErrorCode      = $errorCode
             }
-        } catch {}
+            $script:cachedPnpWifiTime = $now
+        }
     }
 
     if (-not $hasHardware) {
@@ -776,6 +810,11 @@ function Invoke-GlazierWiFiAutoConnect {
         [int]$TimeoutSeconds = 20
     )
 
+    $wlanSvc = Get-Service -Name WlanSvc -ErrorAction SilentlyContinue
+    if ($wlanSvc -and $wlanSvc.Status -ne 'Running') {
+        Start-Service -Name WlanSvc -ErrorAction SilentlyContinue
+    }
+
     $isWinPE = (Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\MiniNT') -or (Test-Path 'X:\')
     if (-not $ProfileDirs -or $ProfileDirs.Count -eq 0) {
         $ProfileDirs = if ($isWinPE) {
@@ -864,7 +903,6 @@ function Invoke-GlazierWiFiAutoConnect {
     }
 
     $wlanIface = $ifaces[0]
-    [GlazierNativeWlan]::TriggerScan($wlanIface.InterfaceGuid) | Out-Null
 
     $stagedXmlFiles = @()
     foreach ($pDir in $ProfileDirs) {
@@ -891,6 +929,8 @@ function Invoke-GlazierWiFiAutoConnect {
         } catch {}
     }
 
+    [GlazierNativeWlan]::TriggerScan($wlanIface.InterfaceGuid) | Out-Null
+
     $maxIterations = [int]($TimeoutSeconds * 2)
     for ($poll = 0; $poll -lt $maxIterations; $poll++) {
         if ($OnPulse) { & $OnPulse }
@@ -912,9 +952,26 @@ function Invoke-GlazierWiFiAutoConnect {
             $statusMsg = "Acquiring DHCP IPv4 lease..."
         } elseif ($curState -eq 4) {
             $statusMsg = "Scanning channels for '$primaryProfile'..."
-            if ($poll % 6 -eq 0) {
-                foreach ($pn in $profileNames) {
-                    [GlazierNativeWlan]::Connect($wlanIface.InterfaceGuid, $pn) | Out-Null
+            if ($poll -ge 4) {
+                $shouldConnect = ($poll % 6 -eq 0)
+                if (-not $shouldConnect) {
+                    try {
+                        $availNets = [GlazierNativeWlan]::GetAvailableNetworks($wlanIface.InterfaceGuid)
+                        foreach ($an in $availNets) {
+                            if ($profileNames -contains $an.SSID) {
+                                $shouldConnect = $true
+                                break
+                            }
+                        }
+                    } catch {}
+                }
+                if ($shouldConnect) {
+                    foreach ($pn in $profileNames) {
+                        [GlazierNativeWlan]::Connect($wlanIface.InterfaceGuid, $pn) | Out-Null
+                    }
+                }
+                if ($poll % 10 -eq 0) {
+                    [GlazierNativeWlan]::TriggerScan($wlanIface.InterfaceGuid) | Out-Null
                 }
             }
         }
@@ -1154,6 +1211,7 @@ function Show-GlazierNetworkGUI {
             if ($listView.SelectedItems.Count -gt 0) {
                 $selItem = $listView.SelectedItems[0]
                 $netInfo = $selItem.Tag
+                $isSameSsid = ($txtSSID.Text -eq $selItem.Text)
                 $txtSSID.Text = $selItem.Text
                 if ($netInfo -and -not $netInfo.SecurityEnabled) {
                     $txtPassword.Text = ""
@@ -1163,6 +1221,9 @@ function Show-GlazierNetworkGUI {
                     $txtPassword.Enabled = $true
                     $secName = if ($netInfo) { $netInfo.AuthAlgorithmName } else { "Secured" }
                     $lblWiFiStatus.Text = "Selected $secName network. Enter password to connect."
+                    if (-not $isSameSsid -and -not $script:isPopulating) {
+                        $txtPassword.Text = ""
+                    }
                 }
             }
         })
@@ -1340,10 +1401,14 @@ function Show-GlazierNetworkGUI {
     $form.Controls.Add($btnContinue)
 
     # Wi-Fi List Population
+    $script:isPopulating = $false
     $populateNetworksAction = {
         if ($listView) {
-            $listView.Items.Clear()
+            $prevSsid = if ($listView.SelectedItems.Count -gt 0) { $listView.SelectedItems[0].Text } else { $null }
+            $script:isPopulating = $true
+            $listView.BeginUpdate()
             try {
+                $listView.Items.Clear()
                 $wIfs = [GlazierNativeWlan]::EnumInterfaces()
                 if ($wIfs -and $wIfs.Count -gt 0) {
                     $nets = [GlazierNativeWlan]::GetAvailableNetworks($wIfs[0].InterfaceGuid)
@@ -1353,10 +1418,16 @@ function Show-GlazierNetworkGUI {
                         $secText = if (-not $n.SecurityEnabled) { "Open" } else { $n.AuthAlgorithmName }
                         $item.SubItems.Add($secText) | Out-Null
                         $item.Tag = $n
+                        if ($prevSsid -and $n.SSID -eq $prevSsid) {
+                            $item.Selected = $true
+                        }
                         $listView.Items.Add($item) | Out-Null
                     }
                 }
-            } catch {}
+            } finally {
+                $listView.EndUpdate()
+                $script:isPopulating = $false
+            }
         }
     }
 
@@ -1365,15 +1436,12 @@ function Show-GlazierNetworkGUI {
 
         $btnRefresh.Add_Click({
             $lblWiFiStatus.Text = "Scanning Wi-Fi channels..."
-            [System.Windows.Forms.Application]::DoEvents()
             try {
                 $wIfs = [GlazierNativeWlan]::EnumInterfaces()
                 if ($wIfs -and $wIfs.Count -gt 0) {
                     [GlazierNativeWlan]::TriggerScan($wIfs[0].InterfaceGuid) | Out-Null
-                    Start-Sleep -Milliseconds 600
-                    & $populateNetworksAction
-                    $lblWiFiStatus.Text = "Scan completed. Found $($listView.Items.Count) network(s)."
                 }
+                $script:refreshPendingTicks = 2
             } catch {
                 $lblWiFiStatus.Text = "Scan failed: $_"
             }
@@ -1464,8 +1532,11 @@ function Show-GlazierNetworkGUI {
 
     $script:autoContinueRemaining = 3
     $script:hasStartedCountdown = $false
+    $script:tickCount = 0
+    $script:refreshPendingTicks = 0
 
     $timer.Add_Tick({
+        $script:tickCount++
         $curTel = Get-GlazierNetworkTelemetry
 
         if ($curTel.WiredState -eq 'Green') {
@@ -1494,6 +1565,20 @@ function Show-GlazierNetworkGUI {
             $dotInternet.BackColor = [System.Drawing.Color]::FromArgb(239, 68, 68)
         }
         $lblInternetDetail.Text = $curTel.InternetDetail
+
+        if ($hasWifi) {
+            if ($script:refreshPendingTicks -gt 0) {
+                $script:refreshPendingTicks--
+                & $populateNetworksAction
+                if ($script:refreshPendingTicks -eq 0) {
+                    $lblWiFiStatus.Text = "Scan completed. Found $($listView.Items.Count) network(s)."
+                }
+            } elseif ($curTel.WirelessState -ne 'Green') {
+                if ($script:tickCount -eq 1 -or $script:tickCount -eq 2 -or ($listView.Items.Count -eq 0) -or ($script:tickCount % 4 -eq 0)) {
+                    & $populateNetworksAction
+                }
+            }
+        }
 
         if ($stagedProfileNames.Count -gt 0 -and $curTel.WirelessState -ne 'Green') {
             try {
