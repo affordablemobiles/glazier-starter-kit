@@ -322,6 +322,14 @@ try {
         . $wifiScript
     }
 
+    if (Get-Command Wait-GlazierACPowerGUI -ErrorAction SilentlyContinue) {
+        $form.TopMost = $false
+        [System.Windows.Forms.Application]::DoEvents()
+        Wait-GlazierACPowerGUI | Out-Null
+        $form.TopMost = $true
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+
     $connected = $false
     if (Get-Command Invoke-GlazierWiFiAutoConnect -ErrorAction SilentlyContinue) {
         Add-Log -Message "Running Glazier Wi-Fi & Wired auto-connect pre-check..." -Detail "Checking network..."

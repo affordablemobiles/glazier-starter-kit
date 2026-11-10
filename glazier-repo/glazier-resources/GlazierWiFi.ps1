@@ -205,6 +205,24 @@ public class GlazierNativeWlan {
         out IntPtr ppData,
         IntPtr pWlanOpcodeValueType);
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SYSTEM_POWER_STATUS {
+        public byte ACLineStatus;
+        public byte BatteryFlag;
+        public byte BatteryLifePercent;
+        public byte SystemStatusFlag;
+        public int BatteryLifeTime;
+        public int BatteryFullLifeTime;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetSystemPowerStatus(out SYSTEM_POWER_STATUS lpSystemPowerStatus);
+
+    public static bool GetPowerStatus(out SYSTEM_POWER_STATUS sps) {
+        return GetSystemPowerStatus(out sps);
+    }
+
     public static string GetAuthAlgorithmName(uint auth) {
         switch (auth) {
             case 1: return "Open";
@@ -554,6 +572,7 @@ function New-GlazierWiFiProfileXml {
                 <authentication>WPA3SAE</authentication>
                 <encryption>AES</encryption>
                 <useOneX>false</useOneX>
+                <transitionMode xmlns="http://www.microsoft.com/networking/WLAN/profile/v4">true</transitionMode>
             </authEncryption>
             <sharedKey>
                 <keyType>passPhrase</keyType>
@@ -597,6 +616,9 @@ function New-GlazierWiFiProfileXml {
     <MSM>
 $secXml
     </MSM>
+    <MacRandomization xmlns="http://www.microsoft.com/networking/WLAN/profile/v3">
+        <enableRandomization>false</enableRandomization>
+    </MacRandomization>
 </WLANProfile>
 "@
 }
@@ -649,6 +671,199 @@ function Export-GlazierHostWiFiProfiles {
         }
     }
     return $exportedFiles
+}
+
+function Get-GlazierPowerStatus {
+    $sps = New-Object GlazierNativeWlan+SYSTEM_POWER_STATUS
+    $ret = [GlazierNativeWlan]::GetPowerStatus([ref]$sps)
+    if (-not $ret) {
+        return [PSCustomObject]@{
+            IsOnBattery    = $false
+            ACLineStatus   = 255
+            BatteryPercent = 255
+        }
+    }
+    $isOnBattery = ($sps.ACLineStatus -eq 0 -and ($sps.BatteryFlag -band 128) -eq 0 -and $sps.BatteryFlag -ne 255)
+    return [PSCustomObject]@{
+        IsOnBattery    = $isOnBattery
+        ACLineStatus   = [int]$sps.ACLineStatus
+        BatteryPercent = [int]$sps.BatteryLifePercent
+    }
+}
+
+function Wait-GlazierACPowerGUI {
+    $pwr = Get-GlazierPowerStatus
+    if (-not $pwr.IsOnBattery) {
+        return $true
+    }
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "AC Power Required"
+    $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::None
+    $form.ClientSize = New-Object System.Drawing.Size(620, 300)
+    $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+    $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $form.ControlBox = $false
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+    $form.TopMost = $true
+    $form.BackColor = [System.Drawing.Color]::FromArgb(245, 247, 250)
+
+    # 1. Amber/Red Warning Header Panel
+    $panelHeader = New-Object System.Windows.Forms.Panel
+    $panelHeader.Location = New-Object System.Drawing.Point(0, 0)
+    $panelHeader.Size = New-Object System.Drawing.Size(620, 68)
+    $panelHeader.BackColor = [System.Drawing.Color]::FromArgb(254, 243, 199)
+    $form.Controls.Add($panelHeader)
+
+    $lblBadge = New-Object System.Windows.Forms.Label
+    $lblBadge.Text = "[!]"
+    $lblBadge.Location = New-Object System.Drawing.Point(20, 18)
+    $lblBadge.Size = New-Object System.Drawing.Size(36, 32)
+    $lblBadge.Font = New-Object System.Drawing.Font("Segoe UI", 18, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
+    $lblBadge.ForeColor = [System.Drawing.Color]::FromArgb(180, 83, 9)
+    $panelHeader.Controls.Add($lblBadge)
+
+    $lblTitle = New-Object System.Windows.Forms.Label
+    $lblTitle.Text = "AC Power Required - Please Connect Charger"
+    $lblTitle.Location = New-Object System.Drawing.Point(60, 20)
+    $lblTitle.Size = New-Object System.Drawing.Size(540, 32)
+    $lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 18, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
+    $lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(180, 83, 9)
+    $panelHeader.Controls.Add($lblTitle)
+
+    # 2. Main Body Message
+    $lblBody = New-Object System.Windows.Forms.Label
+    $lblBody.Text = "This laptop is currently running on battery power. Please plug in the AC power adapter now to prevent firmware or OS installation failures."
+    $lblBody.Location = New-Object System.Drawing.Point(28, 86)
+    $lblBody.Size = New-Object System.Drawing.Size(564, 46)
+    $lblBody.Font = New-Object System.Drawing.Font("Segoe UI", 13, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
+    $lblBody.ForeColor = [System.Drawing.Color]::FromArgb(51, 65, 85)
+    $form.Controls.Add($lblBody)
+
+    # 3. Live Status Readout
+    $lblStatus = New-Object System.Windows.Forms.Label
+    $battText = if ($pwr.BatteryPercent -ne 255) { "$($pwr.BatteryPercent)%" } else { "Unknown" }
+    $lblStatus.Text = "Battery Level: $battText - Waiting for AC power adapter..."
+    $lblStatus.Location = New-Object System.Drawing.Point(28, 140)
+    $lblStatus.Size = New-Object System.Drawing.Size(564, 26)
+    $lblStatus.Font = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
+    $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
+    $form.Controls.Add($lblStatus)
+
+    # 4. 3-Panel Aero Shimmer Bar Pulsing in Amber (245, 158, 11)
+    $trackW = 564
+    $trackH = 20
+
+    $progressTrack = New-Object System.Windows.Forms.Panel
+    $progressTrack.Location = New-Object System.Drawing.Point(28, 178)
+    $progressTrack.Size = New-Object System.Drawing.Size($trackW, $trackH)
+    $progressTrack.BackColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
+    $progressTrack.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+    $form.Controls.Add($progressTrack)
+
+    $progressFill = New-Object System.Windows.Forms.Panel
+    $progressFill.Location = New-Object System.Drawing.Point(0, 0)
+    $progressFill.Size = New-Object System.Drawing.Size([int]($trackW * 0.4), $trackH)
+    $progressFill.BackColor = [System.Drawing.Color]::FromArgb(245, 158, 11)
+    $progressTrack.Controls.Add($progressFill)
+
+    $progressPulse = New-Object System.Windows.Forms.Panel
+    $progressPulse.Location = New-Object System.Drawing.Point(-70, 0)
+    $progressPulse.Size = New-Object System.Drawing.Size(70, $trackH)
+    $progressPulse.BackColor = [System.Drawing.Color]::FromArgb(251, 191, 36)
+    $progressFill.Controls.Add($progressPulse)
+
+    $progressPulseCore = New-Object System.Windows.Forms.Panel
+    $progressPulseCore.Location = New-Object System.Drawing.Point(20, 0)
+    $progressPulseCore.Size = New-Object System.Drawing.Size(30, $trackH)
+    $progressPulseCore.BackColor = [System.Drawing.Color]::FromArgb(253, 230, 138)
+    $progressPulse.Controls.Add($progressPulseCore)
+
+    # 5. Bottom Continue on Battery Button
+    $btnContinueBattery = New-Object System.Windows.Forms.Button
+    $btnContinueBattery.Text = "Continue on Battery (Not Recommended)"
+    $btnContinueBattery.Location = New-Object System.Drawing.Point(340, 230)
+    $btnContinueBattery.Size = New-Object System.Drawing.Size(252, 38)
+    $btnContinueBattery.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnContinueBattery.BackColor = [System.Drawing.Color]::FromArgb(240, 242, 245)
+    $btnContinueBattery.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
+    $btnContinueBattery.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
+    $btnContinueBattery.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(203, 213, 225)
+    $btnContinueBattery.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
+    $form.Controls.Add($btnContinueBattery)
+
+    $btnContinueBattery.Add_Click({
+        $form.DialogResult = [System.Windows.Forms.DialogResult]::Ignore
+        $form.Close()
+    })
+
+    $shimmerTimer = New-Object System.Windows.Forms.Timer
+    $shimmerTimer.Interval = 50
+    $script:pwrShimmerPos = -70
+    $shimmerTimer.Add_Tick({
+        $script:pwrShimmerPos = ($script:pwrShimmerPos + 16)
+        if ($script:pwrShimmerPos -gt ($progressFill.Width + 70)) {
+            $script:pwrShimmerPos = -70
+        }
+        $progressPulse.Left = $script:pwrShimmerPos
+    })
+
+    $checkTimer = New-Object System.Windows.Forms.Timer
+    $checkTimer.Interval = 500
+
+    $checkTimer.Add_Tick({
+        $curPwr = Get-GlazierPowerStatus
+        $bPct = if ($curPwr.BatteryPercent -ne 255) { "$($curPwr.BatteryPercent)%" } else { "Unknown" }
+
+        if (-not $curPwr.IsOnBattery) {
+            $checkTimer.Stop()
+            $shimmerTimer.Stop()
+
+            $panelHeader.BackColor = [System.Drawing.Color]::FromArgb(209, 250, 229)
+            $lblBadge.Text = "[OK]"
+            $lblBadge.ForeColor = [System.Drawing.Color]::FromArgb(4, 120, 87)
+            $lblTitle.Text = "AC Power Connected"
+            $lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(4, 120, 87)
+            $lblStatus.Text = "AC Power Connected! Continuing deployment..."
+            $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(4, 120, 87)
+
+            $progressFill.Width = $trackW
+            $progressFill.BackColor = [System.Drawing.Color]::FromArgb(16, 185, 129)
+            $progressPulse.Visible = $false
+            $btnContinueBattery.Enabled = $false
+
+            $form.Refresh()
+            [System.Windows.Forms.Application]::DoEvents()
+            Start-Sleep -Milliseconds 800
+
+            $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+            $form.Close()
+        } else {
+            $lblStatus.Text = "Battery Level: $bPct - Waiting for AC power adapter..."
+        }
+    })
+
+    $form.Add_FormClosing({
+        param($sender, $e)
+        if ($form.DialogResult -ne [System.Windows.Forms.DialogResult]::OK -and
+            $form.DialogResult -ne [System.Windows.Forms.DialogResult]::Ignore) {
+            $e.Cancel = $true
+        }
+    })
+
+    $shimmerTimer.Start()
+    $checkTimer.Start()
+
+    $form.ShowDialog() | Out-Null
+
+    $checkTimer.Stop()
+    $shimmerTimer.Stop()
+    $checkTimer.Dispose()
+    $shimmerTimer.Dispose()
+    $form.Dispose()
+
+    return $true
 }
 
 function Test-GlazierInternetReachability {
@@ -996,8 +1211,10 @@ function Invoke-GlazierWiFiAutoConnect {
         if ($tel.WiredState -eq 'Amber') {
             for ($i = 0; $i -lt 15; $i++) {
                 if ($OnStatus) { & $OnStatus "Wired link detected - waiting for DHCP lease..." }
-                if ($OnPulse) { & $OnPulse }
-                Start-Sleep -Milliseconds 1000
+                for ($pTick = 0; $pTick -lt 20; $pTick++) {
+                    if ($OnPulse) { & $OnPulse }
+                    Start-Sleep -Milliseconds 50
+                }
                 $tel = Get-GlazierNetworkTelemetry
                 if ($tel.InternetState -eq 'Green') {
                     return $true
@@ -1015,12 +1232,14 @@ function Invoke-GlazierWiFiAutoConnect {
 
     $ifaces = $null
     for ($wTick = 0; $wTick -lt 48; $wTick++) {
-        if ($OnPulse) { & $OnPulse }
         try {
             $ifaces = [GlazierNativeWlan]::EnumInterfaces()
             if ($ifaces -and $ifaces.Count -gt 0) { break }
         } catch {}
-        Start-Sleep -Milliseconds 250
+        for ($pTick = 0; $pTick -lt 5; $pTick++) {
+            if ($OnPulse) { & $OnPulse }
+            Start-Sleep -Milliseconds 50
+        }
     }
 
     if (-not $ifaces -or $ifaces.Count -eq 0) {
@@ -1048,19 +1267,34 @@ function Invoke-GlazierWiFiAutoConnect {
             if ($px -and $px.WLANProfile) {
                 $ssid = if ($px.WLANProfile.SSIDConfig.SSID.name) { [string]$px.WLANProfile.SSIDConfig.SSID.name } else { [string]$px.WLANProfile.name }
                 $auth = [string]$px.WLANProfile.MSM.security.authEncryption.authentication
+                if ($isWinPE -and ($auth -match '^(WPA3SAE|WPA3|WPA3-Personal)$')) {
+                    $auth = "WPA2PSK"
+                }
                 if (-not $auth) { $auth = "WPA2PSK" }
                 $key = [string]$px.WLANProfile.MSM.security.sharedKey.keyMaterial
                 $isHidden = ([string]$px.WLANProfile.SSIDConfig.nonBroadcast -eq 'true')
                 $cleanXml = New-GlazierWiFiProfileXml -SSID $ssid -Password $key -AuthType $auth -IsHidden $isHidden
                 Set-Content -Path $pf.FullName -Value $cleanXml -Encoding ASCII -Force
                 $reasonCode = 0
-                [GlazierNativeWlan]::SetProfile($wlanIface.InterfaceGuid, $cleanXml, [ref]$reasonCode) | Out-Null
+                $setOk = [GlazierNativeWlan]::SetProfile($wlanIface.InterfaceGuid, $cleanXml, [ref]$reasonCode)
+                if (-not $setOk -and ($auth -match '^(WPA3SAE|WPA3|WPA3-Personal)$')) {
+                    $auth = "WPA2PSK"
+                    $cleanXml = New-GlazierWiFiProfileXml -SSID $ssid -Password $key -AuthType $auth -IsHidden $isHidden
+                    Set-Content -Path $pf.FullName -Value $cleanXml -Encoding ASCII -Force
+                    $setOk = [GlazierNativeWlan]::SetProfile($wlanIface.InterfaceGuid, $cleanXml, [ref]$reasonCode)
+                }
+                if (-not $setOk) {
+                    & netsh.exe wlan add profile ('filename=' + $pf.FullName) user=all | Out-Null
+                }
                 $profileNames += $ssid
             } else {
                 $pn = $pf.BaseName
                 if ($pn) {
                     $reasonCode = 0
-                    [GlazierNativeWlan]::SetProfile($wlanIface.InterfaceGuid, $xmlContent, [ref]$reasonCode) | Out-Null
+                    $setOk = [GlazierNativeWlan]::SetProfile($wlanIface.InterfaceGuid, $xmlContent, [ref]$reasonCode)
+                    if (-not $setOk) {
+                        & netsh.exe wlan add profile ('filename=' + $pf.FullName) user=all | Out-Null
+                    }
                     $profileNames += $pn
                 }
             }
@@ -1069,10 +1303,10 @@ function Invoke-GlazierWiFiAutoConnect {
 
     [GlazierNativeWlan]::TriggerScan($wlanIface.InterfaceGuid) | Out-Null
 
+    $lastConnectAttempt = [DateTime]::MinValue
+    $lastStatusMsg = ""
     $maxIterations = [int]($TimeoutSeconds * 2)
     for ($poll = 0; $poll -lt $maxIterations; $poll++) {
-        if ($OnPulse) { & $OnPulse }
-
         $curTel = Get-GlazierNetworkTelemetry
         if ($curTel.InternetState -eq 'Green') {
             return $true
@@ -1090,34 +1324,40 @@ function Invoke-GlazierWiFiAutoConnect {
             $statusMsg = "Acquiring DHCP IPv4 lease..."
         } elseif ($curState -eq 4) {
             $statusMsg = "Scanning channels for '$primaryProfile'..."
-            if ($poll -ge 4) {
-                $shouldConnect = ($poll % 6 -eq 0)
-                if (-not $shouldConnect) {
-                    try {
-                        $availNets = [GlazierNativeWlan]::GetAvailableNetworks($wlanIface.InterfaceGuid)
-                        foreach ($an in $availNets) {
-                            if ($profileNames -contains $an.SSID) {
-                                $shouldConnect = $true
-                                break
-                            }
+            $timeSinceConnect = ([DateTime]::UtcNow - $lastConnectAttempt).TotalSeconds
+            if (($timeSinceConnect -ge 7) -and ($poll -ge 4)) {
+                $isTargetVisible = $false
+                try {
+                    $availNets = [GlazierNativeWlan]::GetAvailableNetworks($wlanIface.InterfaceGuid)
+                    foreach ($an in $availNets) {
+                        if ($profileNames -contains $an.SSID) {
+                            $isTargetVisible = $true
+                            break
                         }
-                    } catch {}
-                }
-                if ($shouldConnect) {
+                    }
+                } catch {}
+
+                if ($isTargetVisible -or $poll -ge 8) {
                     foreach ($pn in $profileNames) {
                         [GlazierNativeWlan]::Connect($wlanIface.InterfaceGuid, $pn) | Out-Null
                     }
-                }
-                if ($poll % 10 -eq 0) {
-                    [GlazierNativeWlan]::TriggerScan($wlanIface.InterfaceGuid) | Out-Null
+                    $lastConnectAttempt = [DateTime]::UtcNow
                 }
             }
+
+            if ($timeSinceConnect -ge 4 -and ($poll % 16 -eq 0)) {
+                [GlazierNativeWlan]::TriggerScan($wlanIface.InterfaceGuid) | Out-Null
+            }
         }
-        if ($OnStatus -and $statusMsg) {
+        if ($OnStatus -and $statusMsg -and ($statusMsg -ne $lastStatusMsg)) {
+            $lastStatusMsg = $statusMsg
             & $OnStatus $statusMsg
         }
 
-        Start-Sleep -Milliseconds 500
+        for ($pTick = 0; $pTick -lt 10; $pTick++) {
+            if ($OnPulse) { & $OnPulse }
+            Start-Sleep -Milliseconds 50
+        }
     }
 
     return $false
@@ -1134,15 +1374,34 @@ function Show-GlazierNetworkGUI {
 
     $stagedProfileDirs = @("X:\glazier-resources\wifi_profiles", "C:\glazier-resources\wifi_profiles")
     $stagedProfileNames = @()
+    $firstStagedSSID = ""
+    $firstStagedKey = ""
+    $isWinPELocal = (Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\MiniNT') -or (Test-Path 'X:\')
     foreach ($spd in $stagedProfileDirs) {
         if (Test-Path $spd) {
             $sXmls = Get-ChildItem -Path $spd -Filter "*.xml" -ErrorAction SilentlyContinue
             foreach ($sx in $sXmls) {
                 try {
-                    [xml]$xDoc = Get-Content -Path $sx.FullName -Raw -ErrorAction SilentlyContinue
-                    $pName = if ($xDoc -and $xDoc.WLANProfile) { $xDoc.WLANProfile.name } else { $sx.BaseName }
-                    if ($pName -and -not ($stagedProfileNames -contains $pName)) {
-                        $stagedProfileNames += $pName
+                    $rawContent = Get-Content -Path $sx.FullName -Raw -ErrorAction SilentlyContinue
+                    [xml]$xDoc = $rawContent
+                    if ($xDoc -and $xDoc.WLANProfile) {
+                        $pName = if ($xDoc.WLANProfile.SSIDConfig.SSID.name) { [string]$xDoc.WLANProfile.SSIDConfig.SSID.name } else { [string]$xDoc.WLANProfile.name }
+                        $pAuth = [string]$xDoc.WLANProfile.MSM.security.authEncryption.authentication
+                        $pKey = [string]$xDoc.WLANProfile.MSM.security.sharedKey.keyMaterial
+                        $pHidden = ([string]$xDoc.WLANProfile.SSIDConfig.nonBroadcast -eq 'true')
+                        if ($isWinPELocal -and ($pAuth -match '^(WPA3SAE|WPA3|WPA3-Personal)$')) {
+                            $pAuth = "WPA2PSK"
+                        }
+                        if (-not $pAuth) { $pAuth = if ($pKey) { "WPA2PSK" } else { "open" } }
+                        $cleanXml = New-GlazierWiFiProfileXml -SSID $pName -Password $pKey -AuthType $pAuth -IsHidden $pHidden
+                        Set-Content -Path $sx.FullName -Value $cleanXml -Encoding ASCII -Force
+                        if ($pName -and -not ($stagedProfileNames -contains $pName)) {
+                            $stagedProfileNames += $pName
+                        }
+                        if (-not $firstStagedSSID) {
+                            $firstStagedSSID = $pName
+                            $firstStagedKey = $pKey
+                        }
                     }
                 } catch {}
             }
@@ -1153,7 +1412,23 @@ function Show-GlazierNetworkGUI {
         try {
             $wIfaces = [GlazierNativeWlan]::EnumInterfaces()
             if ($wIfaces -and $wIfaces.Count -gt 0) {
-                [GlazierNativeWlan]::TriggerScan($wIfaces[0].InterfaceGuid) | Out-Null
+                $targetGuid = $wIfaces[0].InterfaceGuid
+                foreach ($spd in $stagedProfileDirs) {
+                    if (Test-Path $spd) {
+                        $sXmls = Get-ChildItem -Path $spd -Filter "*.xml" -ErrorAction SilentlyContinue
+                        foreach ($sx in $sXmls) {
+                            try {
+                                $cXml = Get-Content -Path $sx.FullName -Raw -ErrorAction SilentlyContinue
+                                $rCode = 0
+                                $sOk = [GlazierNativeWlan]::SetProfile($targetGuid, $cXml, [ref]$rCode)
+                                if (-not $sOk) {
+                                    & netsh.exe wlan add profile ('filename=' + $sx.FullName) user=all | Out-Null
+                                }
+                            } catch {}
+                        }
+                    }
+                }
+                [GlazierNativeWlan]::TriggerScan($targetGuid) | Out-Null
             }
         } catch {}
     }
@@ -1251,6 +1526,9 @@ function Show-GlazierNetworkGUI {
         $txtSSID.Location = New-Object System.Drawing.Point(72, 248)
         $txtSSID.Size = New-Object System.Drawing.Size(160, 24)
         $txtSSID.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
+        if ($firstStagedSSID) {
+            $txtSSID.Text = $firstStagedSSID
+        }
         $form.Controls.Add($txtSSID)
 
         $lblPass = New-Object System.Windows.Forms.Label
@@ -1266,6 +1544,9 @@ function Show-GlazierNetworkGUI {
         $txtPassword.Size = New-Object System.Drawing.Size(140, 24)
         $txtPassword.PasswordChar = '*'
         $txtPassword.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
+        if ($firstStagedKey) {
+            $txtPassword.Text = $firstStagedKey
+        }
         $form.Controls.Add($txtPassword)
 
         $chkShow = New-Object System.Windows.Forms.CheckBox
@@ -1620,6 +1901,11 @@ function Show-GlazierNetworkGUI {
                 if (-not $pass) { $auth = "open" }
             }
 
+            $isWinPELocal = (Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\MiniNT') -or (Test-Path 'X:\')
+            if ($isWinPELocal -and ($auth -match '^(WPA3SAE|WPA3|WPA3-Personal)$')) {
+                $auth = "WPA2PSK"
+            }
+
             $lblWiFiStatus.Text = "Configuring profile and connecting to '$targetSSID'..."
             [System.Windows.Forms.Application]::DoEvents()
 
@@ -1627,19 +1913,23 @@ function Show-GlazierNetworkGUI {
                 $xml = New-GlazierWiFiProfileXml -SSID $targetSSID -Password $pass -AuthType $auth -IsHidden $isHidden
                 $reason = 0
                 $setOk = [GlazierNativeWlan]::SetProfile($targetGuid, $xml, [ref]$reason)
-                if (-not $setOk) {
-                    $reasonStr = [GlazierNativeWlan]::ReasonCodeToString($reason)
-                    $lblWiFiStatus.Text = "Failed to set profile: $reasonStr"
-                    return
+                if (-not $setOk -and ($auth -match '^(WPA3SAE|WPA3|WPA3-Personal)$')) {
+                    $auth = "WPA2PSK"
+                    $xml = New-GlazierWiFiProfileXml -SSID $targetSSID -Password $pass -AuthType $auth -IsHidden $isHidden
+                    $setOk = [GlazierNativeWlan]::SetProfile($targetGuid, $xml, [ref]$reason)
                 }
 
-                $isWinPELocal = (Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\MiniNT') -or (Test-Path 'X:\')
                 $saveDir = if ($isWinPELocal) { "X:\glazier-resources\wifi_profiles" } else { "C:\glazier-resources\wifi_profiles" }
                 if (-not (Test-Path $saveDir)) {
                     New-Item -ItemType Directory -Path $saveDir -Force | Out-Null
                 }
                 $safeFileName = ($targetSSID -replace '[\\/:*?"<>|]', '_') + ".xml"
-                Set-Content -Path (Join-Path $saveDir $safeFileName) -Value $xml -Encoding ASCII -Force
+                $savedPath = Join-Path $saveDir $safeFileName
+                Set-Content -Path $savedPath -Value $xml -Encoding ASCII -Force
+
+                if (-not $setOk) {
+                    & netsh.exe wlan add profile ('filename=' + $savedPath) user=all | Out-Null
+                }
 
                 $connOk = [GlazierNativeWlan]::Connect($targetGuid, $targetSSID)
                 if ($connOk) {
@@ -1719,14 +2009,16 @@ function Show-GlazierNetworkGUI {
         }
 
         if ($stagedProfileNames.Count -gt 0 -and $curTel.WirelessState -ne 'Green') {
-            try {
-                $wIfs = [GlazierNativeWlan]::EnumInterfaces()
-                if ($wIfs -and $wIfs.Count -gt 0 -and $wIfs[0].State -eq 4) {
-                    foreach ($spn in $stagedProfileNames) {
-                        [GlazierNativeWlan]::Connect($wIfs[0].InterfaceGuid, $spn) | Out-Null
+            if ($script:tickCount % 6 -eq 2 -and ($null -eq $txtPassword -or -not $txtPassword.Focused)) {
+                try {
+                    $wIfs = [GlazierNativeWlan]::EnumInterfaces()
+                    if ($wIfs -and $wIfs.Count -gt 0 -and $wIfs[0].State -eq 4) {
+                        foreach ($spn in $stagedProfileNames) {
+                            [GlazierNativeWlan]::Connect($wIfs[0].InterfaceGuid, $spn) | Out-Null
+                        }
                     }
-                }
-            } catch {}
+                } catch {}
+            }
         }
 
         if ($curTel.InternetState -eq 'Green') {

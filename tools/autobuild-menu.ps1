@@ -807,6 +807,11 @@ function Start-GlazierDeploymentGUI {
         [void][Win32WindowHelper]::SetThreadExecutionState(0x80000003)
     } catch {}
 
+    # Check AC power before launching deployment GUI
+    if (Get-Command Wait-GlazierACPowerGUI -ErrorAction SilentlyContinue) {
+        Wait-GlazierACPowerGUI | Out-Null
+    }
+
     # In Phase 2 Windows, disable AC/DC standby, hibernate, and monitor timeouts
     if (-not $isWinPE) {
         foreach ($setting in @('standby-timeout-ac', 'standby-timeout-dc', 'hibernate-timeout-ac', 'hibernate-timeout-dc', 'monitor-timeout-ac', 'monitor-timeout-dc')) {
@@ -1136,6 +1141,25 @@ function Start-GlazierDeploymentGUI {
         $btnSaveLogs.Add_Click($saveLogsAction)
         $panelTermHeader.Controls.Add($btnSaveLogs)
 
+        # Retry Deployment button (hidden initially, shown on failure)
+        $btnRetry = New-Object System.Windows.Forms.Button
+        $btnRetry.Text = "Retry Deployment"
+        $btnRetry.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 245), 4)
+        $btnRetry.Size = New-Object System.Drawing.Size(130, 28)
+        $btnRetry.UseVisualStyleBackColor = $false
+        $btnRetry.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+        $btnRetry.FlatAppearance.BorderSize = 1
+        $btnRetry.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(5, 150, 105)
+        $btnRetry.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(5, 150, 105)
+        $btnRetry.BackColor = [System.Drawing.Color]::FromArgb(16, 185, 129)
+        $btnRetry.ForeColor = [System.Drawing.Color]::White
+        $btnRetry.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
+        $btnRetry.Visible = $false
+        $btnRetry.Add_Click({
+            $script:retryRequested = $true
+        })
+        $panelTermHeader.Controls.Add($btnRetry)
+
         # Reboot PC button (hidden initially, shown on failure)
         $btnReboot = New-Object System.Windows.Forms.Button
         $btnReboot.Text = "Reboot PC"
@@ -1239,38 +1263,9 @@ function Start-GlazierDeploymentGUI {
         $form.Show()
         [System.Windows.Forms.Application]::DoEvents()
 
-        # Phase 1 vs Phase 2 Wi-Fi profile handling and network readiness
-        if ($isWinPE) {
-            $wifiExportDir = "X:\glazier-resources\wifi_profiles"
-            if (-not (Test-Path $wifiExportDir)) {
-                New-Item -ItemType Directory -Path $wifiExportDir -Force | Out-Null
-            }
-            # Scan candidate drives for staged profiles if none present in RAM
-            $existingProfiles = Get-ChildItem -Path $wifiExportDir -Filter "*.xml" -ErrorAction SilentlyContinue
-            if (-not $existingProfiles -or $existingProfiles.Count -eq 0) {
-                try {
-                    $candidateDrives = [System.IO.DriveInfo]::GetDrives() | Where-Object { $_.IsReady -and $_.Name -ne 'X:\' }
-                    foreach ($cDrive in $candidateDrives) {
-                        $stagedSourcesDir = Join-Path $cDrive.RootDirectory.FullName "sources\wifi_profiles"
-                        if (Test-Path $stagedSourcesDir) {
-                            $stagedXmls = Get-ChildItem -Path $stagedSourcesDir -Filter "*.xml" -ErrorAction SilentlyContinue
-                            foreach ($sXml in $stagedXmls) {
-                                Copy-Item -Path $sXml.FullName -Destination $wifiExportDir -Force -ErrorAction SilentlyContinue
-                            }
-                        }
-                    }
-                } catch {}
-            }
-            if ((Get-Service -Name WlanSvc -ErrorAction SilentlyContinue).Status -eq 'Running') {
-                try {
-                    if (Get-Command Export-GlazierHostWiFiProfiles -ErrorAction SilentlyContinue) {
-                        Export-GlazierHostWiFiProfiles -OutputDir $wifiExportDir
-                    }
-                } catch {}
-            }
-        } else {
-            $wifiDir = "C:\glazier-resources\wifi_profiles"
-            $netConnected = $false
+        $script:isRetryRun = $false
+        do {
+            $script:retryRequested = $false
 
             $pulseAction = {
                 $script:shimmerPos = ($script:shimmerPos + 16)
@@ -1284,39 +1279,138 @@ function Start-GlazierDeploymentGUI {
                 [System.Windows.Forms.Application]::DoEvents()
             }
 
-            if (Get-Command Invoke-GlazierWiFiAutoConnect -ErrorAction SilentlyContinue) {
-                $lblStage.Text = "Checking network connectivity in Windows..."
-                $netConnected = Invoke-GlazierWiFiAutoConnect `
-                    -ProfileDirs @($wifiDir) `
-                    -OnStatus $statusAction `
-                    -OnPulse $pulseAction `
-                    -TimeoutSeconds 20
+            if ($script:isRetryRun) {
+                $panelHeader.BackColor = [System.Drawing.Color]::FromArgb(240, 242, 245)
+                $lblBadge.Text = "[..]"
+                $lblBadge.BackColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
+                $lblBadge.ForeColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
+                $lblPercent.Text = "0%"
+                $lblPercent.ForeColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
+                $lblTitle.Text = "Deploying Windows Image ($GlazierSpecOS)"
+                $lblStage.Text = "Retrying deployment..."
+                $progressFill.BackColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
+                $progressFill.Width = 36
+                $progressPulse.Visible = $true
 
-                if (-not $netConnected) {
-                    $form.TopMost = $false
-                    [System.Windows.Forms.Application]::DoEvents()
-                    if (Get-Command Show-GlazierNetworkGUI -ErrorAction SilentlyContinue) {
-                        $guiOk = Show-GlazierNetworkGUI
-                        if ($guiOk) { $netConnected = $true }
+                $chkAutoScroll.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 340), 6)
+                $btnTerminal.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 230), 4)
+                $btnSaveLogs.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 115), 4)
+                $btnSaveLogs.BackColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
+                $btnRetry.Visible = $false
+                $btnReboot.Visible = $false
+
+                $txtOutput.AppendText("`r`n=== RETRYING GLAZIER DEPLOYMENT ($(Get-Date -Format 'HH:mm:ss')) ===`r`n")
+                if ($chkAutoScroll.Checked) {
+                    [void][Win32WindowHelper]::SendMessage($txtOutput.Handle, 0x0115, [IntPtr]7, [IntPtr]::Zero)
+                }
+
+                if ($isWinPE) {
+                    $staleTaskLists = @("X:\task_list.yaml", "X:\glazier_cache\task_list.yaml", "C:\task_list.yaml", "C:\glazier_cache\task_list.yaml")
+                    foreach ($stl in $staleTaskLists) {
+                        if (Test-Path $stl) {
+                            Remove-Item -Path $stl -Force -ErrorAction SilentlyContinue
+                        }
                     }
-                    $form.TopMost = $isWinPE
-                    [System.Windows.Forms.Application]::DoEvents()
+                }
+            }
+
+            # Re-verify AC power on every run/retry
+            if (Get-Command Wait-GlazierACPowerGUI -ErrorAction SilentlyContinue) {
+                $form.TopMost = $false
+                [System.Windows.Forms.Application]::DoEvents()
+                Wait-GlazierACPowerGUI | Out-Null
+                $form.TopMost = $isWinPE
+                [System.Windows.Forms.Application]::DoEvents()
+            }
+
+            # Phase 1 vs Phase 2 Wi-Fi profile handling and network readiness
+            if ($isWinPE) {
+                $wifiExportDir = "X:\glazier-resources\wifi_profiles"
+                if (-not (Test-Path $wifiExportDir)) {
+                    New-Item -ItemType Directory -Path $wifiExportDir -Force | Out-Null
+                }
+                # Scan candidate drives for staged profiles if none present in RAM
+                $existingProfiles = Get-ChildItem -Path $wifiExportDir -Filter "*.xml" -ErrorAction SilentlyContinue
+                if (-not $existingProfiles -or $existingProfiles.Count -eq 0) {
+                    try {
+                        $candidateDrives = [System.IO.DriveInfo]::GetDrives() | Where-Object { $_.IsReady -and $_.Name -ne 'X:\' }
+                        foreach ($cDrive in $candidateDrives) {
+                            $stagedSourcesDir = Join-Path $cDrive.RootDirectory.FullName "sources\wifi_profiles"
+                            if (Test-Path $stagedSourcesDir) {
+                                $stagedXmls = Get-ChildItem -Path $stagedSourcesDir -Filter "*.xml" -ErrorAction SilentlyContinue
+                                foreach ($sXml in $stagedXmls) {
+                                    Copy-Item -Path $sXml.FullName -Destination $wifiExportDir -Force -ErrorAction SilentlyContinue
+                                }
+                            }
+                        }
+                    } catch {}
+                }
+                if ((Get-Service -Name WlanSvc -ErrorAction SilentlyContinue).Status -eq 'Running') {
+                    try {
+                        if (Get-Command Export-GlazierHostWiFiProfiles -ErrorAction SilentlyContinue) {
+                            Export-GlazierHostWiFiProfiles -OutputDir $wifiExportDir
+                        }
+                    } catch {}
+                }
+
+                if ($script:isRetryRun) {
+                    $netConnected = $false
+                    if (Get-Command Invoke-GlazierWiFiAutoConnect -ErrorAction SilentlyContinue) {
+                        $netConnected = Invoke-GlazierWiFiAutoConnect `
+                            -ProfileDirs @($wifiExportDir, "C:\glazier-resources\wifi_profiles") `
+                            -OnStatus $statusAction `
+                            -OnPulse $pulseAction `
+                            -TimeoutSeconds 15
+                    } else {
+                        $netConnected = ($null -ne (Test-WinPENetwork))
+                    }
+                    if (-not $netConnected) {
+                        $form.TopMost = $false
+                        [System.Windows.Forms.Application]::DoEvents()
+                        if (Get-Command Show-GlazierNetworkGUI -ErrorAction SilentlyContinue) {
+                            Show-GlazierNetworkGUI | Out-Null
+                        }
+                        $form.TopMost = $isWinPE
+                        [System.Windows.Forms.Application]::DoEvents()
+                    }
                 }
             } else {
-                $lblStage.Text = "Waiting for network connection in Windows..."
-                for ($nSec = 1; $nSec -le 15; $nSec++) {
-                    $netOk = Test-WinPENetwork
-                    if ($netOk) { $netConnected = $true; break }
-                    & $pulseAction
-                    Start-Sleep -Milliseconds 1000
+                $wifiDir = "C:\glazier-resources\wifi_profiles"
+                $netConnected = $false
+
+                if (Get-Command Invoke-GlazierWiFiAutoConnect -ErrorAction SilentlyContinue) {
+                    $lblStage.Text = "Checking network connectivity in Windows..."
+                    $netConnected = Invoke-GlazierWiFiAutoConnect `
+                        -ProfileDirs @($wifiDir) `
+                        -OnStatus $statusAction `
+                        -OnPulse $pulseAction `
+                        -TimeoutSeconds 20
+
+                    if (-not $netConnected) {
+                        $form.TopMost = $false
+                        [System.Windows.Forms.Application]::DoEvents()
+                        if (Get-Command Show-GlazierNetworkGUI -ErrorAction SilentlyContinue) {
+                            $guiOk = Show-GlazierNetworkGUI
+                            if ($guiOk) { $netConnected = $true }
+                        }
+                        $form.TopMost = $isWinPE
+                        [System.Windows.Forms.Application]::DoEvents()
+                    }
+                } else {
+                    $lblStage.Text = "Waiting for network connection in Windows..."
+                    for ($nSec = 1; $nSec -le 15; $nSec++) {
+                        $netOk = Test-WinPENetwork
+                        if ($netOk) { $netConnected = $true; break }
+                        & $pulseAction
+                        Start-Sleep -Milliseconds 1000
+                    }
+                }
+
+                # Only delete C:\glazier-resources\wifi_profiles after connectivity is established
+                if ($netConnected -and (Test-Path $wifiDir)) {
+                    Remove-Item -Path $wifiDir -Recurse -Force -ErrorAction SilentlyContinue
                 }
             }
-
-            # Only delete C:\glazier-resources\wifi_profiles after connectivity is established
-            if ($netConnected -and (Test-Path $wifiDir)) {
-                Remove-Item -Path $wifiDir -Recurse -Force -ErrorAction SilentlyContinue
-            }
-        }
 
         # Set up streaming output paths in $env:TEMP
         $stdoutLog = "$env:TEMP\glazier_stdout.log"
@@ -1647,27 +1741,38 @@ if (-not ('Win32WindowHelper' -as [type])) {
             $progressFill.BackColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
             $btnSaveLogs.BackColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
 
-            # Shift toolbar buttons left to accommodate $btnReboot on far right
-            $chkAutoScroll.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 445), 6)
-            $btnTerminal.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 335), 4)
-            $btnSaveLogs.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 220), 4)
+            # Shift toolbar buttons left to accommodate $btnRetry and $btnReboot on far right
+            $chkAutoScroll.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 590), 6)
+            $btnTerminal.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 475), 4)
+            $btnSaveLogs.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 360), 4)
+            $btnRetry.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 245), 4)
+            $btnRetry.Visible = $true
             $btnReboot.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 105), 4)
             $btnReboot.Visible = $true
             [void][Win32WindowHelper]::SendMessage($txtOutput.Handle, 0x0115, [IntPtr]7, [IntPtr]::Zero)
 
-            # Keep window open until technician closes or reboots
-            while (-not $form.IsDisposed) {
+            # Keep window open until technician closes, reboots, or clicks retry
+            while (-not $form.IsDisposed -and -not $script:retryRequested) {
                 try { [void][Win32WindowHelper]::SetThreadExecutionState(0x80000003) } catch {}
                 [System.Windows.Forms.Application]::DoEvents()
                 Start-Sleep -Milliseconds 100
             }
-            if ($bgForm -and -not $bgForm.IsDisposed) {
-                try { $bgForm.Close(); $bgForm.Dispose() } catch {}
+            if ($script:retryRequested) {
+                $script:isRetryRun = $true
             }
-            $bgForm = $null
-            try { $script:glazierMutex.ReleaseMutex() } catch {}
-            try { [void][Win32WindowHelper]::SetThreadExecutionState(0x80000000) } catch {}
         }
+    } while ($script:retryRequested -and $form -and -not $form.IsDisposed)
+
+    if ($bgForm -and -not $bgForm.IsDisposed) {
+        try { $bgForm.Close(); $bgForm.Dispose() } catch {}
+    }
+    $bgForm = $null
+    if ($form -and -not $form.IsDisposed) {
+        try { $form.Close(); $form.Dispose() } catch {}
+    }
+    $form = $null
+    try { $script:glazierMutex.ReleaseMutex() } catch {}
+    try { [void][Win32WindowHelper]::SetThreadExecutionState(0x80000000) } catch {}
     } catch {
         if ($bgForm -and -not $bgForm.IsDisposed) {
             try { $bgForm.Close(); $bgForm.Dispose() } catch {}
