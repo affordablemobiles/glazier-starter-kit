@@ -665,6 +665,35 @@ function Export-GlazierHostWiFiProfiles {
                 $cleanXml = New-GlazierWiFiProfileXml -SSID $ssid -Password $key -AuthType $auth -IsHidden $isHidden
                 $safeFileName = ($ssid -replace '[\\/:*?"<>|]', '_')
                 $outPath = Join-Path $OutputDir "$safeFileName.xml"
+
+                $isProtected = ([string]$wx.WLANProfile.MSM.security.sharedKey.protected -eq 'true')
+                if ($isProtected) {
+                    try {
+                        & netsh.exe wlan export profile ("name=$ssid") key=clear ("folder=$env:TEMP") 2>$null | Out-Null
+                        $tempMatches = Get-ChildItem -Path $env:TEMP -Filter "*$ssid*.xml" -ErrorAction SilentlyContinue
+                        if ($tempMatches) {
+                            foreach ($tFile in $tempMatches) {
+                                try {
+                                    [xml]$nx = Get-Content -Path $tFile.FullName -Raw -ErrorAction SilentlyContinue
+                                    if ($nx -and $nx.WLANProfile) {
+                                        $nProt = [string]$nx.WLANProfile.MSM.security.sharedKey.protected
+                                        $nKey = [string]$nx.WLANProfile.MSM.security.sharedKey.keyMaterial
+                                        if ($nProt -ne 'true' -and $nKey) {
+                                            $key = $nKey
+                                            $isProtected = $false
+                                        }
+                                    }
+                                } catch {}
+                                Remove-Item -Path $tFile.FullName -Force -ErrorAction SilentlyContinue
+                            }
+                        }
+                    } catch {}
+                }
+                if ($isProtected -or (-not $key -and $auth -notin @('open', 'OWE'))) {
+                    continue
+                }
+
+                $cleanXml = New-GlazierWiFiProfileXml -SSID $ssid -Password $key -AuthType $auth -IsHidden $isHidden
                 Set-Content -Path $outPath -Value $cleanXml -Encoding ASCII -Force
                 $exportedFiles += $outPath
             } catch {}
@@ -692,6 +721,10 @@ function Get-GlazierPowerStatus {
 }
 
 function Wait-GlazierACPowerGUI {
+    if ($env:GLAZIER_AC_BYPASS -eq '1') {
+        return $true
+    }
+
     $pwr = Get-GlazierPowerStatus
     if (-not $pwr.IsOnBattery) {
         return $true
@@ -794,6 +827,7 @@ function Wait-GlazierACPowerGUI {
     $form.Controls.Add($btnContinueBattery)
 
     $btnContinueBattery.Add_Click({
+        $env:GLAZIER_AC_BYPASS = '1'
         $form.DialogResult = [System.Windows.Forms.DialogResult]::Ignore
         $form.Close()
     })

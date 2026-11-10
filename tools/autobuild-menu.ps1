@@ -807,11 +807,6 @@ function Start-GlazierDeploymentGUI {
         [void][Win32WindowHelper]::SetThreadExecutionState(0x80000003)
     } catch {}
 
-    # Check AC power before launching deployment GUI
-    if (Get-Command Wait-GlazierACPowerGUI -ErrorAction SilentlyContinue) {
-        Wait-GlazierACPowerGUI | Out-Null
-    }
-
     # In Phase 2 Windows, disable AC/DC standby, hibernate, and monitor timeouts
     if (-not $isWinPE) {
         foreach ($setting in @('standby-timeout-ac', 'standby-timeout-dc', 'hibernate-timeout-ac', 'hibernate-timeout-dc', 'monitor-timeout-ac', 'monitor-timeout-dc')) {
@@ -1284,12 +1279,11 @@ function Start-GlazierDeploymentGUI {
                 $lblBadge.Text = "[..]"
                 $lblBadge.BackColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
                 $lblBadge.ForeColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
-                $lblPercent.Text = "0%"
-                $lblPercent.ForeColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
                 $lblTitle.Text = "Deploying Windows Image ($GlazierSpecOS)"
                 $lblStage.Text = "Retrying deployment..."
                 $progressFill.BackColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
                 $progressFill.Width = 36
+                $subProgressFill.Width = 0
                 $progressPulse.Visible = $true
 
                 $chkAutoScroll.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 340), 6)
@@ -1605,6 +1599,13 @@ if (-not ('Win32WindowHelper' -as [type])) {
                 $targetFillW = [Math]::Max(36, [int]($trackW * ($fillPct / 100.0)))
                 $progressFill.Width = [Math]::Min($trackW, $targetFillW)
 
+                # Update sub-task progress bar width
+                if ($script:subTaskPct -gt 0) {
+                    $subProgressFill.Width = [Math]::Min($trackW, [Math]::Max(4, [int][Math]::Round($trackW * ($script:subTaskPct / 100.0))))
+                } else {
+                    $subProgressFill.Width = 0
+                }
+
                 # Sweep shimmer pulse across completed portion
                 $script:shimmerPos = ($script:shimmerPos + 16)
                 if ($script:shimmerPos -gt ($progressFill.Width + 70)) {
@@ -1655,7 +1656,6 @@ if (-not ('Win32WindowHelper' -as [type])) {
                 if ($prog) {
                     $lblStage.Text = $prog
                 }
-                $lblPercent.Text = "$($script:currentOverallPct)%"
 
                 [System.Windows.Forms.Application]::DoEvents()
                 Start-Sleep -Milliseconds 100
@@ -1699,14 +1699,13 @@ if (-not ('Win32WindowHelper' -as [type])) {
             $lblBadge.Text = "[OK]"
             $lblBadge.BackColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
             $lblBadge.ForeColor = [System.Drawing.Color]::White
-            $lblPercent.Text = "100%"
-            $lblPercent.ForeColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
             $lblTitle.Text = "Stage Complete - Rebooting..."
             $lblStage.Text = "Glazier tasks completed successfully. Rebooting system..."
             $progressPulse.Visible = $false
             $progressFill.Location = New-Object System.Drawing.Point(0, 0)
             $progressFill.Size = New-Object System.Drawing.Size($trackW, $trackH)
             $progressFill.BackColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
+            $subProgressFill.Width = 0
 
             for ($sec = 0; $sec -lt 30; $sec++) {
                 [System.Windows.Forms.Application]::DoEvents()
@@ -1728,7 +1727,6 @@ if (-not ('Win32WindowHelper' -as [type])) {
             $lblBadge.Text = "[!]"
             $lblBadge.BackColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
             $lblBadge.ForeColor = [System.Drawing.Color]::White
-            $lblPercent.ForeColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
             $lblTitle.Text = "DEPLOYMENT FAILED (Exit Code: $($proc.ExitCode)) - Please Photograph This Screen"
             if ($script:lastGlazierError) {
                 $lblStage.Text = "$($script:lastGlazierError) | Take a photo of this screen and send to IT Support."
@@ -1739,6 +1737,7 @@ if (-not ('Win32WindowHelper' -as [type])) {
             $progressFill.Location = New-Object System.Drawing.Point(0, 0)
             $progressFill.Size = New-Object System.Drawing.Size($trackW, $trackH)
             $progressFill.BackColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
+            $subProgressFill.Width = 0
             $btnSaveLogs.BackColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
 
             # Shift toolbar buttons left to accommodate $btnRetry and $btnReboot on far right

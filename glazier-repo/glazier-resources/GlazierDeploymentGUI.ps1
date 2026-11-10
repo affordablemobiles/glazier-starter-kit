@@ -422,11 +422,6 @@ function Start-GlazierDeploymentGUI {
         [void][Win32WindowHelper]::SetThreadExecutionState(0x80000003)
     } catch {}
 
-    # Check AC power before launching deployment GUI
-    if (Get-Command Wait-GlazierACPowerGUI -ErrorAction SilentlyContinue) {
-        Wait-GlazierACPowerGUI | Out-Null
-    }
-
     # In Phase 2 Windows, disable AC/DC standby, hibernate, and monitor timeouts
     if (-not $isWinPE) {
         foreach ($setting in @('standby-timeout-ac', 'standby-timeout-dc', 'hibernate-timeout-ac', 'hibernate-timeout-dc', 'monitor-timeout-ac', 'monitor-timeout-dc')) {
