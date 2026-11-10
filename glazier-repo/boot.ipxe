@@ -1,0 +1,163 @@
+#!ipxe
+
+# ====================================================================
+# DISPLAY & THEME CONFIGURATION
+# ====================================================================
+
+# 1. Official AO Brand Guidelines Core Green Palette
+#    Slot 1: Dark Green  (#02422B)
+#    Slot 2: ON Green    (#12C35A)
+#    Slot 6: Light Green (#BEFCC8)
+#    Slot 7: White       (#FFFFFF)
+colour --rgb 0x02422b 1 ||
+colour --rgb 0x12c35a 2 ||
+colour --rgb 0xbefcc8 6 ||
+colour --rgb 0xffffff 7 ||
+
+# 2. Map iPXE Menu Color Pairs (bg 8 = Transparent)
+#    Pair 0 (DEFAULT):   White text on Transparent background
+#    Pair 1 (NORMAL):    Light Green title text on Transparent background
+#    Pair 2 (SELECT):    Dark Green text on Bright ON Green selection bar
+#    Pair 3 (SEPARATOR): Light Green gap headers on Transparent background
+#    Pair 6 (EDIT):      Dark Green text on Bright ON Green bar
+cpair --foreground 7 --background 8 0 ||
+cpair --foreground 6 --background 8 1 ||
+cpair --foreground 1 --background 2 2 ||
+cpair --foreground 6 --background 8 3 ||
+cpair --foreground 1 --background 2 6 ||
+
+# 3. Apply background with resolution-scaled margins to center the menu
+#    and keep clear of the bottom-left AO logo
+set image_uri https://storage.googleapis.com/a1comms-glazier-config/logo.png
+
+console --x 1920 --y 1080 --left 520 --right 520 --top 300 --bottom 300 --picture ${image_uri} --keep || console --x 1366 --y 768 --left 240 --right 240 --top 160 --bottom 160 --picture ${image_uri} --keep || console --x 1024 --y 768 --left 120 --right 120 --top 160 --bottom 160 --picture ${image_uri} --keep || console --picture ${image_uri} --keep ||
+
+clear image_uri
+
+# ====================================================================
+# MENU DEFAULTS
+# ====================================================================
+set menu-timeout 60000
+set submenu-timeout ${menu-timeout}
+isset ${menu-default} || set menu-default exit
+
+# ====================================================================
+# MAIN MENU
+# ====================================================================
+:start
+menu AO Mobile  |  Preboot Provisioning Environment (Glazier)
+item --gap --
+item --gap -- INTERACTIVE PROVISIONING
+item --key m menu             [M]  Interactive Profile Chooser (Dynamic GUI Menu)
+item --gap --
+item --gap -- GLAZIER IMAGES (MANAGED)
+item --key s windows-stable   [S]  Windows 11 Pro  -  Standard Managed Build (windows-stable)
+item --key d win10-stable     [D]  Windows 10 Pro  -  Standard Managed Build (win10-stable)
+item --gap --
+item --gap -- GLAZIER IMAGES (BLANK / UNMANAGED)
+item --key b windows-blank    [B]  Windows 11 Pro  -  Blank Configuration (windows-blank)
+item --key n win10-blank      [N]  Windows 10 Pro  -  Blank Configuration (win10-blank)
+item --gap --
+item --gap -- SYSTEM & RECOVERY TOOLS
+item shell                    [ ]  Drop to iPXE Command Shell
+item reboot                   [ ]  Reboot Workstation
+item --gap --
+item --key x exit             [X]  Exit iPXE and Continue Normal Boot
+
+choose --timeout ${menu-timeout} --default ${menu-default} selected || goto cancel
+set menu-timeout 0
+goto ${selected}
+
+:cancel
+echo Menu selection cancelled, dropping to shell...
+
+:shell
+echo Type 'exit' to return to the boot menu.
+shell
+set menu-timeout 0
+set submenu-timeout 0
+goto start
+
+:failed
+echo Booting failed, dropping to shell...
+goto shell
+
+:reboot
+reboot
+
+:exit
+echo Continuing to local disk boot...
+# 1. Reset console back to native UEFI mode before handing control back to firmware
+console ||
+# 2. Attempt direct local disk boot (works even from Dell F12 One-Time Boot menu)
+sanboot --no-describe --drive 0 || sanboot --no-describe --drive 0x80 ||
+# 3. Exit with status 1 (non-zero) so UEFI Boot Manager advances to Windows Boot Manager
+exit 1
+
+# ====================================================================
+# MAIN MENU ITEMS
+# ====================================================================
+:menu
+echo Booting WinPE for Glazier with interactive GUI profile chooser...
+kernel https://storage.googleapis.com/a1comms-glazier-config/wimboot.x86_64.efi
+initrd https://storage.googleapis.com/a1comms-glazier-config/menu/autobuild.ps1                             autobuild.ps1
+initrd https://storage.googleapis.com/a1comms-glazier-config/glazier-resources/Initialize-GlazierWinPE.ps1 Initialize-GlazierWinPE.ps1
+initrd https://storage.googleapis.com/a1comms-glazier-config/glazier-resources/GlazierWiFi.ps1            GlazierWiFi.ps1
+initrd https://storage.googleapis.com/a1comms-glazier-config/glazier-resources/GlazierDeploymentGUI.ps1  GlazierDeploymentGUI.ps1
+initrd https://storage.googleapis.com/a1comms-mgmt-files/winpe/Boot/BCD                                     BCD
+initrd https://storage.googleapis.com/a1comms-mgmt-files/winpe/Boot/boot.sdi                                boot.sdi
+initrd https://storage.googleapis.com/a1comms-mgmt-files/winpe/sources/boot.wim                             boot.wim
+boot || goto failed
+goto start
+
+:windows-stable
+echo Booting WinPE for Glazier with windows-stable configuration...
+kernel https://storage.googleapis.com/a1comms-glazier-config/wimboot.x86_64.efi
+initrd https://storage.googleapis.com/a1comms-glazier-config/stable/autobuild.ps1                           autobuild.ps1
+initrd https://storage.googleapis.com/a1comms-glazier-config/glazier-resources/Initialize-GlazierWinPE.ps1 Initialize-GlazierWinPE.ps1
+initrd https://storage.googleapis.com/a1comms-glazier-config/glazier-resources/GlazierWiFi.ps1            GlazierWiFi.ps1
+initrd https://storage.googleapis.com/a1comms-glazier-config/glazier-resources/GlazierDeploymentGUI.ps1  GlazierDeploymentGUI.ps1
+initrd https://storage.googleapis.com/a1comms-mgmt-files/winpe/Boot/BCD                                     BCD
+initrd https://storage.googleapis.com/a1comms-mgmt-files/winpe/Boot/boot.sdi                                boot.sdi
+initrd https://storage.googleapis.com/a1comms-mgmt-files/winpe/sources/boot.wim                             boot.wim
+boot || goto failed
+goto start
+
+:windows-blank
+echo Booting WinPE for Glazier with windows-blank configuration...
+kernel https://storage.googleapis.com/a1comms-glazier-config/wimboot.x86_64.efi
+initrd https://storage.googleapis.com/a1comms-glazier-config/blank/autobuild.ps1                            autobuild.ps1
+initrd https://storage.googleapis.com/a1comms-glazier-config/glazier-resources/Initialize-GlazierWinPE.ps1 Initialize-GlazierWinPE.ps1
+initrd https://storage.googleapis.com/a1comms-glazier-config/glazier-resources/GlazierWiFi.ps1            GlazierWiFi.ps1
+initrd https://storage.googleapis.com/a1comms-glazier-config/glazier-resources/GlazierDeploymentGUI.ps1  GlazierDeploymentGUI.ps1
+initrd https://storage.googleapis.com/a1comms-mgmt-files/winpe/Boot/BCD                                     BCD
+initrd https://storage.googleapis.com/a1comms-mgmt-files/winpe/Boot/boot.sdi                                boot.sdi
+initrd https://storage.googleapis.com/a1comms-mgmt-files/winpe/sources/boot.wim                             boot.wim
+boot || goto failed
+goto start
+
+:win10-stable
+echo Booting WinPE for Glazier with win10-stable configuration...
+kernel https://storage.googleapis.com/a1comms-glazier-config/wimboot.x86_64.efi
+initrd https://storage.googleapis.com/a1comms-glazier-config/win10-stable/autobuild.ps1                     autobuild.ps1
+initrd https://storage.googleapis.com/a1comms-glazier-config/glazier-resources/Initialize-GlazierWinPE.ps1 Initialize-GlazierWinPE.ps1
+initrd https://storage.googleapis.com/a1comms-glazier-config/glazier-resources/GlazierWiFi.ps1            GlazierWiFi.ps1
+initrd https://storage.googleapis.com/a1comms-glazier-config/glazier-resources/GlazierDeploymentGUI.ps1  GlazierDeploymentGUI.ps1
+initrd https://storage.googleapis.com/a1comms-mgmt-files/winpe/Boot/BCD                                     BCD
+initrd https://storage.googleapis.com/a1comms-mgmt-files/winpe/Boot/boot.sdi                                boot.sdi
+initrd https://storage.googleapis.com/a1comms-mgmt-files/winpe/sources/boot.wim                             boot.wim
+boot || goto failed
+goto start
+
+:win10-blank
+echo Booting WinPE for Glazier with win10-blank configuration...
+kernel https://storage.googleapis.com/a1comms-glazier-config/wimboot.x86_64.efi
+initrd https://storage.googleapis.com/a1comms-glazier-config/win10-blank/autobuild.ps1                      autobuild.ps1
+initrd https://storage.googleapis.com/a1comms-glazier-config/glazier-resources/Initialize-GlazierWinPE.ps1 Initialize-GlazierWinPE.ps1
+initrd https://storage.googleapis.com/a1comms-glazier-config/glazier-resources/GlazierWiFi.ps1            GlazierWiFi.ps1
+initrd https://storage.googleapis.com/a1comms-glazier-config/glazier-resources/GlazierDeploymentGUI.ps1  GlazierDeploymentGUI.ps1
+initrd https://storage.googleapis.com/a1comms-mgmt-files/winpe/Boot/BCD                                     BCD
+initrd https://storage.googleapis.com/a1comms-mgmt-files/winpe/Boot/boot.sdi                                boot.sdi
+initrd https://storage.googleapis.com/a1comms-mgmt-files/winpe/sources/boot.wim                             boot.wim
+boot || goto failed
+goto start

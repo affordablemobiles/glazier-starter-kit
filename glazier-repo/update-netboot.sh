@@ -282,18 +282,24 @@ goto start
 
 :glazier_prod
 kernel ${BUCKET_URL}/wimboot
-initrd ${BUCKET_URL}/menu/autobuild.ps1          autobuild.ps1
-initrd ${BOOT_URL}/Boot/BCD                      BCD
-initrd ${BOOT_URL}/Boot/boot.sdi                 boot.sdi
-initrd ${BOOT_URL}/sources/boot.wim              boot.wim
+initrd ${BUCKET_URL}/menu/autobuild.ps1                             autobuild.ps1
+initrd ${BUCKET_URL}/glazier-resources/Initialize-GlazierWinPE.ps1 Initialize-GlazierWinPE.ps1
+initrd ${BUCKET_URL}/glazier-resources/GlazierWiFi.ps1            GlazierWiFi.ps1
+initrd ${BUCKET_URL}/glazier-resources/GlazierDeploymentGUI.ps1  GlazierDeploymentGUI.ps1
+initrd ${BOOT_URL}/Boot/BCD                                         BCD
+initrd ${BOOT_URL}/Boot/boot.sdi                                    boot.sdi
+initrd ${BOOT_URL}/sources/boot.wim                                 boot.wim
 boot || goto failed
 goto start
 
 :glazier_dev
 kernel ${BUCKET_URL}/wimboot
-initrd ${BOOT_DEV_URL}/Boot/BCD                  BCD
-initrd ${BOOT_DEV_URL}/Boot/boot.sdi             boot.sdi
-initrd ${BOOT_DEV_URL}/sources/boot.wim          boot.wim
+initrd ${BUCKET_URL}/glazier-resources/Initialize-GlazierWinPE.ps1 Initialize-GlazierWinPE.ps1
+initrd ${BUCKET_URL}/glazier-resources/GlazierWiFi.ps1            GlazierWiFi.ps1
+initrd ${BUCKET_URL}/glazier-resources/GlazierDeploymentGUI.ps1  GlazierDeploymentGUI.ps1
+initrd ${BOOT_DEV_URL}/Boot/BCD                                     BCD
+initrd ${BOOT_DEV_URL}/Boot/boot.sdi                                boot.sdi
+initrd ${BOOT_DEV_URL}/sources/boot.wim                             boot.wim
 boot || goto failed
 goto start
 EOF

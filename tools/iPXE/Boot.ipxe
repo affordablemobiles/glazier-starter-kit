@@ -54,48 +54,64 @@ exit
 :menu
 echo Booting WinPE for Glazier with interactive GUI profile chooser
 kernel http://storage.googleapis.com/CHANGE_ME/wimboot.x86_64.efi
-initrd http://storage.googleapis.com/CHANGE_ME/menu/autobuild.ps1            autobuild.ps1
-initrd http://storage.googleapis.com/CHANGE_ME/Boot/BCD                      BCD
-initrd http://storage.googleapis.com/CHANGE_ME/Boot/boot.sdi                 boot.sdi
-initrd http://storage.googleapis.com/CHANGE_ME/sources/boot.wim              boot.wim
+initrd http://storage.googleapis.com/CHANGE_ME/menu/autobuild.ps1                             autobuild.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/glazier-resources/Initialize-GlazierWinPE.ps1 Initialize-GlazierWinPE.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/glazier-resources/GlazierWiFi.ps1            GlazierWiFi.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/glazier-resources/GlazierDeploymentGUI.ps1  GlazierDeploymentGUI.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/Boot/BCD                                     BCD
+initrd http://storage.googleapis.com/CHANGE_ME/Boot/boot.sdi                                boot.sdi
+initrd http://storage.googleapis.com/CHANGE_ME/sources/boot.wim                             boot.wim
 boot || goto failed
 goto start
 
 :windows-stable
 echo Booting WinPE for Glazier with windows-stable configuration
 kernel http://storage.googleapis.com/CHANGE_ME/wimboot.x86_64.efi
-initrd http://storage.googleapis.com/CHANGE_ME/Boot/BCD                      BCD
-initrd http://storage.googleapis.com/CHANGE_ME/Boot/boot.sdi                 boot.sdi
-initrd http://storage.googleapis.com/CHANGE_ME/sources/boot.wim              boot.wim
+initrd http://storage.googleapis.com/CHANGE_ME/stable/autobuild.ps1                           autobuild.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/glazier-resources/Initialize-GlazierWinPE.ps1 Initialize-GlazierWinPE.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/glazier-resources/GlazierWiFi.ps1            GlazierWiFi.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/glazier-resources/GlazierDeploymentGUI.ps1  GlazierDeploymentGUI.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/Boot/BCD                                     BCD
+initrd http://storage.googleapis.com/CHANGE_ME/Boot/boot.sdi                                boot.sdi
+initrd http://storage.googleapis.com/CHANGE_ME/sources/boot.wim                             boot.wim
 boot || goto failed
 goto start
 
 :windows-blank
 echo Booting WinPE for Glazier with windows-blank configuration
 kernel http://storage.googleapis.com/CHANGE_ME/wimboot.x86_64.efi
-initrd http://storage.googleapis.com/CHANGE_ME/blank/autobuild.ps1             autobuild.ps1
-initrd http://storage.googleapis.com/CHANGE_ME/Boot/BCD                      BCD
-initrd http://storage.googleapis.com/CHANGE_ME/Boot/boot.sdi                 boot.sdi
-initrd http://storage.googleapis.com/CHANGE_ME/sources/boot.wim              boot.wim
+initrd http://storage.googleapis.com/CHANGE_ME/blank/autobuild.ps1                            autobuild.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/glazier-resources/Initialize-GlazierWinPE.ps1 Initialize-GlazierWinPE.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/glazier-resources/GlazierWiFi.ps1            GlazierWiFi.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/glazier-resources/GlazierDeploymentGUI.ps1  GlazierDeploymentGUI.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/Boot/BCD                                     BCD
+initrd http://storage.googleapis.com/CHANGE_ME/Boot/boot.sdi                                boot.sdi
+initrd http://storage.googleapis.com/CHANGE_ME/sources/boot.wim                             boot.wim
 boot || goto failed
 goto start
 
 :win10-stable
 echo Booting WinPE for Glazier with win10-stable configuration
 kernel http://storage.googleapis.com/CHANGE_ME/wimboot.x86_64.efi
-initrd http://storage.googleapis.com/CHANGE_ME/win10-stable/autobuild.ps1      autobuild.ps1
-initrd http://storage.googleapis.com/CHANGE_ME/Boot/BCD                      BCD
-initrd http://storage.googleapis.com/CHANGE_ME/Boot/boot.sdi                 boot.sdi
-initrd http://storage.googleapis.com/CHANGE_ME/sources/boot.wim              boot.wim
+initrd http://storage.googleapis.com/CHANGE_ME/win10-stable/autobuild.ps1                     autobuild.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/glazier-resources/Initialize-GlazierWinPE.ps1 Initialize-GlazierWinPE.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/glazier-resources/GlazierWiFi.ps1            GlazierWiFi.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/glazier-resources/GlazierDeploymentGUI.ps1  GlazierDeploymentGUI.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/Boot/BCD                                     BCD
+initrd http://storage.googleapis.com/CHANGE_ME/Boot/boot.sdi                                boot.sdi
+initrd http://storage.googleapis.com/CHANGE_ME/sources/boot.wim                             boot.wim
 boot || goto failed
 goto start
 
 :win10-blank
 echo Booting WinPE for Glazier with win10-blank configuration
 kernel http://storage.googleapis.com/CHANGE_ME/wimboot.x86_64.efi
-initrd http://storage.googleapis.com/CHANGE_ME/win10-blank/autobuild.ps1       autobuild.ps1
-initrd http://storage.googleapis.com/CHANGE_ME/Boot/BCD                      BCD
-initrd http://storage.googleapis.com/CHANGE_ME/Boot/boot.sdi                 boot.sdi
-initrd http://storage.googleapis.com/CHANGE_ME/sources/boot.wim              boot.wim
+initrd http://storage.googleapis.com/CHANGE_ME/win10-blank/autobuild.ps1                      autobuild.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/glazier-resources/Initialize-GlazierWinPE.ps1 Initialize-GlazierWinPE.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/glazier-resources/GlazierWiFi.ps1            GlazierWiFi.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/glazier-resources/GlazierDeploymentGUI.ps1  GlazierDeploymentGUI.ps1
+initrd http://storage.googleapis.com/CHANGE_ME/Boot/BCD                                     BCD
+initrd http://storage.googleapis.com/CHANGE_ME/Boot/boot.sdi                                boot.sdi
+initrd http://storage.googleapis.com/CHANGE_ME/sources/boot.wim                             boot.wim
 boot || goto failed
 goto start
