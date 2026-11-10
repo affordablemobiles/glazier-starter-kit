@@ -820,6 +820,58 @@ function Start-GlazierDeploymentGUI {
         $txtOutput.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
         $panelTermBody.Controls.Add($txtOutput)
 
+        $script:currentScreen = $screen
+        $resizeLayoutAction = {
+            $curScreen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $script:currentScreen = $curScreen
+            $script:marginX = [Math]::Max(32, [int]($curScreen.Width * 0.03125))
+            $script:topY    = [Math]::Max(16, [int]($curScreen.Height * 0.022))
+            $script:bottomClearance = [Math]::Max(220, [int]($curScreen.Height * 0.245))
+            $script:formW = [Math]::Max(860, $curScreen.Width - ($script:marginX * 2))
+            $script:formH = [Math]::Max(520, $curScreen.Height - $script:topY - $script:bottomClearance)
+
+            if ($bgForm -and -not $bgForm.IsDisposed) {
+                $bgForm.Bounds = $curScreen
+            }
+
+            if ($form -and -not $form.IsDisposed) {
+                $form.Location = New-Object System.Drawing.Point($script:marginX, $script:topY)
+                $form.ClientSize = New-Object System.Drawing.Size($script:formW, $script:formH)
+
+                $panelHeader.Size = New-Object System.Drawing.Size(($script:formW - 40), 102)
+                $lblTitle.Size = New-Object System.Drawing.Size(($script:formW - 140), 28)
+                $lblStage.Size = New-Object System.Drawing.Size(($script:formW - 140), 24)
+
+                $trackW = $script:formW - 140
+                $progressTrack.Size = New-Object System.Drawing.Size($trackW, $trackH)
+                $subProgressTrack.Size = New-Object System.Drawing.Size($trackW, 6)
+
+                $panelTermHeader.Size = New-Object System.Drawing.Size(($script:formW - 40), 36)
+                if ($btnRetry.Visible) {
+                    $chkAutoScroll.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 590), 6)
+                    $btnTerminal.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 475), 4)
+                    $btnSaveLogs.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 360), 4)
+                    $btnRetry.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 245), 4)
+                    $btnReboot.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 105), 4)
+                } else {
+                    $chkAutoScroll.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 340), 6)
+                    $btnTerminal.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 230), 4)
+                    $btnSaveLogs.Location = New-Object System.Drawing.Point(($panelTermHeader.Width - 115), 4)
+                }
+
+                $panelTermBody.Size = New-Object System.Drawing.Size(($script:formW - 40), ($script:formH - 192))
+                $txtOutput.Size = New-Object System.Drawing.Size(($panelTermBody.Width - 12), ($panelTermBody.Height - 16))
+
+                try {
+                    [void][Win32WindowHelper]::ShowWindow($form.Handle, 5) # SW_SHOW
+                    $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
+                    $form.BringToFront()
+                    $form.Invalidate($true)
+                    $form.Update()
+                } catch {}
+            }
+        }
+
         $form.Add_Shown({
             try {
                 if ($consoleHwnd -ne [IntPtr]::Zero) {
@@ -839,39 +891,51 @@ function Start-GlazierDeploymentGUI {
         })
 
         if (-not $isWinPE) {
-            $bgImgPath = if (Test-Path "$env:TEMP\winpe_cropped.jpg") { "$env:TEMP\winpe_cropped.jpg" } else { "C:\glazier-resources\winpe.jpg" }
-            if (Test-Path $bgImgPath) {
-                $bgForm = New-Object System.Windows.Forms.Form
-                $bgForm.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
-                $bgForm.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
-                $bgForm.Bounds = $screen
-                $bgForm.BackColor = [System.Drawing.Color]::FromArgb(2, 66, 43)
-                $bgForm.ShowInTaskbar = $false
-                $bgForm.TopMost = $false
+            $bgCandidates = @(
+                "C:\glazier-resources\winpe.jpg",
+                "C:\Windows\Web\Screen\AO-Background-4K-OfficialPattern-BottomMiddle.png",
+                "$env:TEMP\winpe_cropped.jpg"
+            )
+            $bgImgPath = $bgCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+            $bgForm = New-Object System.Windows.Forms.Form
+            $bgForm.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+            $bgForm.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+            $bgForm.Bounds = $screen
+            $bgForm.BackColor = [System.Drawing.Color]::FromArgb(2, 66, 43)
+            $bgForm.ShowInTaskbar = $false
+            $bgForm.TopMost = $false
+            if ($bgImgPath) {
                 try {
                     $bgForm.BackgroundImage = [System.Drawing.Image]::FromFile($bgImgPath)
                     $bgForm.BackgroundImageLayout = [System.Windows.Forms.ImageLayout]::Stretch
                 } catch {}
+            }
 
-                $pinBottomAction = {
-                    if ($bgForm -and -not $bgForm.IsDisposed) {
-                        [void][Win32WindowHelper]::SetWindowPos($bgForm.Handle, [Win32WindowHelper]::HWND_BOTTOM, 0, 0, 0, 0, 0x0013)
-                    }
-                }
-                $bgForm.Add_Shown($pinBottomAction)
-                $bgForm.Add_Activated($pinBottomAction)
-                $bgForm.Add_MouseDown($pinBottomAction)
-                $bgForm.Add_Click($pinBottomAction)
-
-                $bgForm.Show()
+            $pinBottomAction = {
                 if ($bgForm -and -not $bgForm.IsDisposed) {
                     [void][Win32WindowHelper]::SetWindowPos($bgForm.Handle, [Win32WindowHelper]::HWND_BOTTOM, 0, 0, 0, 0, 0x0013)
                 }
+            }
+            $bgForm.Add_Shown($pinBottomAction)
+            $bgForm.Add_Activated($pinBottomAction)
+            $bgForm.Add_MouseDown($pinBottomAction)
+            $bgForm.Add_Click($pinBottomAction)
+
+            $bgForm.Show()
+            if ($bgForm -and -not $bgForm.IsDisposed) {
+                [void][Win32WindowHelper]::SetWindowPos($bgForm.Handle, [Win32WindowHelper]::HWND_BOTTOM, 0, 0, 0, 0, 0x0013)
             }
         }
 
         $form.Show()
         [System.Windows.Forms.Application]::DoEvents()
+
+        $displayChangeHandler = $null
+        try {
+            $displayChangeHandler = [EventHandler]{ param($s, $e) & $resizeLayoutAction }
+            [Microsoft.Win32.SystemEvents]::add_DisplaySettingsChanged($displayChangeHandler)
+        } catch {}
 
         $script:isRetryRun = $false
         do {
@@ -1057,6 +1121,7 @@ function Start-GlazierDeploymentGUI {
         $script:rebootTriggered = $false
         $pulseFrames = @("[.  ]", "[.. ]", "[...]", "[ ..]", "[  .]", "[   ]")
         $pulseIdx = 0
+        $loopTickCount = 0
 
         try {
             while (-not $proc.HasExited) {
@@ -1065,6 +1130,20 @@ function Start-GlazierDeploymentGUI {
                     [void][Win32WindowHelper]::SetWindowPos($bgForm.Handle, [Win32WindowHelper]::HWND_BOTTOM, 0, 0, 0, 0, 0x0013)
                 }
                 $hasNewText = $false
+
+                $loopTickCount++
+                if ($loopTickCount % 20 -eq 0) {
+                    $curBounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+                    if ($curBounds.Width -ne $script:currentScreen.Width -or $curBounds.Height -ne $script:currentScreen.Height) {
+                        & $resizeLayoutAction
+                    }
+                }
+                if ($loopTickCount % 50 -eq 0) {
+                    try {
+                        [void][Win32WindowHelper]::ShowWindow($form.Handle, 5) # SW_SHOW
+                        $form.Invalidate()
+                    } catch {}
+                }
 
                 $pulseIdx = ($pulseIdx + 1) % $pulseFrames.Length
                 $lblBadge.Text = $pulseFrames[$pulseIdx]
@@ -1253,6 +1332,10 @@ function Start-GlazierDeploymentGUI {
         }
     } while ($script:retryRequested -and $form -and -not $form.IsDisposed)
 
+    if ($displayChangeHandler) {
+        try { [Microsoft.Win32.SystemEvents]::remove_DisplaySettingsChanged($displayChangeHandler) } catch {}
+    }
+
     if ($bgForm -and -not $bgForm.IsDisposed) {
         try { $bgForm.Close(); $bgForm.Dispose() } catch {}
     }
@@ -1264,6 +1347,9 @@ function Start-GlazierDeploymentGUI {
     try { $script:glazierMutex.ReleaseMutex() } catch {}
     try { [void][Win32WindowHelper]::SetThreadExecutionState(0x80000000) } catch {}
     } catch {
+        if ($displayChangeHandler) {
+            try { [Microsoft.Win32.SystemEvents]::remove_DisplaySettingsChanged($displayChangeHandler) } catch {}
+        }
         if ($bgForm -and -not $bgForm.IsDisposed) {
             try { $bgForm.Close(); $bgForm.Dispose() } catch {}
         }

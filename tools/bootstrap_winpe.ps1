@@ -913,10 +913,11 @@ try {
 
 Set-Content -Path $wallpaperScriptPath -Value $wallpaperScriptContent -Encoding UTF8 -Force
 
-if (Test-Path $wallpaperPath) {
-    Copy-Item -Path $wallpaperPath -Destination "$MountPath\glazier-resources\winpe.jpg" -Force
-} elseif (Test-Path "$MountPath\Windows\System32\winpe.jpg") {
+if (Test-Path "$MountPath\Windows\System32\winpe.jpg") {
     Copy-Item -Path "$MountPath\Windows\System32\winpe.jpg" -Destination "$MountPath\glazier-resources\winpe.jpg" -Force
+} elseif (Test-Path $wallpaperPath) {
+    Copy-Item -Path $wallpaperPath -Destination "$MountPath\glazier-resources\winpe.jpg" -Force
+    Copy-Item -Path $wallpaperPath -Destination "$MountPath\Windows\System32\winpe.jpg" -Force
 }
 Copy-Item -Path $wallpaperScriptPath -Destination "$MountPath\glazier-resources\Set-WinPEWallpaper.ps1" -Force
 if (Test-Path "$scriptPath\..\glazier-resources\GlazierDeploymentGUI.ps1") {
