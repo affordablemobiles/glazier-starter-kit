@@ -878,7 +878,9 @@ function Start-GlazierDeploymentGUI {
             }
             if ((Get-Service -Name WlanSvc -ErrorAction SilentlyContinue).Status -eq 'Running') {
                 try {
-                    & netsh.exe wlan export profile key=clear folder="$wifiExportDir" | Out-Null
+                    if (Get-Command Export-GlazierHostWiFiProfiles -ErrorAction SilentlyContinue) {
+                        Export-GlazierHostWiFiProfiles -OutputDir $wifiExportDir
+                    }
                 } catch {}
             }
         } else {

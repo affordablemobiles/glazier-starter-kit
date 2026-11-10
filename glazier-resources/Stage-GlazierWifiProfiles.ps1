@@ -43,16 +43,32 @@ if (-not (Test-Path $scriptsDir)) {
     New-Item -ItemType Directory -Path $scriptsDir -Force | Out-Null
 }
 
+$wifiScriptSources = @(
+    "X:\glazier-resources\GlazierWiFi.ps1",
+    "C:\glazier-resources\GlazierWiFi.ps1",
+    "X:\Windows\System32\GlazierWiFi.ps1",
+    "C:\Windows\System32\GlazierWiFi.ps1"
+)
+$wifiScriptSrc = $wifiScriptSources | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($wifiScriptSrc) {
+    Copy-Item -Path $wifiScriptSrc -Destination (Join-Path $scriptsDir "GlazierWiFi.ps1") -Force -ErrorAction SilentlyContinue
+    Write-Output "Copied GlazierWiFi.ps1 to $scriptsDir."
+}
+
 $setupCompletePath = Join-Path $scriptsDir "SetupComplete.cmd"
 
 $setupCompleteSnippet = @'
 net start WlanSvc >nul 2>&1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "for ($i=0; $i -lt 15; $i++) { if ((& netsh.exe wlan show interfaces) -match 'Name\s*:') { break }; Start-Sleep -Seconds 1 }; Get-ChildItem 'C:\Windows\Setup\Scripts\wifi_profiles\*.xml' -ErrorAction SilentlyContinue | ForEach-Object { $fn = $_.FullName; & netsh.exe wlan add profile ('filename=' + $fn) user=all | Out-Null; if ($LASTEXITCODE -eq 0) { try { [xml]$x = Get-Content $fn -Raw; if ($x.WLANProfile.name) { $pn = $x.WLANProfile.name; & netsh.exe wlan connect ('name=' + $pn) | Out-Null } } catch {}; Remove-Item $fn -Force -ErrorAction SilentlyContinue } }; if (-not (Get-ChildItem 'C:\Windows\Setup\Scripts\wifi_profiles\*.xml' -ErrorAction SilentlyContinue)) { Remove-Item 'C:\Windows\Setup\Scripts\wifi_profiles' -Recurse -Force -ErrorAction SilentlyContinue }"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "if (Test-Path 'C:\Windows\Setup\Scripts\GlazierWiFi.ps1') { . 'C:\Windows\Setup\Scripts\GlazierWiFi.ps1'; Invoke-GlazierWiFiAutoConnect -ProfileDirs @('C:\Windows\Setup\Scripts\wifi_profiles') -TimeoutSeconds 25 | Out-Null }; if (Test-Path 'C:\Windows\Setup\Scripts\wifi_profiles') { Remove-Item 'C:\Windows\Setup\Scripts\wifi_profiles' -Recurse -Force -ErrorAction SilentlyContinue }"
 '@
 
 if (Test-Path $setupCompletePath) {
     $existing = Get-Content -Path $setupCompletePath -Raw -ErrorAction SilentlyContinue
-    if ($existing -notmatch 'wifi_profiles') {
+    if ($existing -match 'netsh\.exe wlan') {
+        $updated = $existing -replace '(?s)powershell\.exe -NoProfile -ExecutionPolicy Bypass -Command "[^"]*netsh\.exe wlan[^"]*"', "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command `"if (Test-Path 'C:\Windows\Setup\Scripts\GlazierWiFi.ps1') { . 'C:\Windows\Setup\Scripts\GlazierWiFi.ps1'; Invoke-GlazierWiFiAutoConnect -ProfileDirs @('C:\Windows\Setup\Scripts\wifi_profiles') -TimeoutSeconds 25 | Out-Null }; if (Test-Path 'C:\Windows\Setup\Scripts\wifi_profiles') { Remove-Item 'C:\Windows\Setup\Scripts\wifi_profiles' -Recurse -Force -ErrorAction SilentlyContinue }`""
+        [System.IO.File]::WriteAllText($setupCompletePath, $updated, [System.Text.Encoding]::ASCII)
+        Write-Output "Upgraded legacy Wi-Fi snippet in $setupCompletePath to GlazierWiFi.ps1."
+    } elseif ($existing -notmatch 'wifi_profiles|GlazierWiFi') {
         Add-Content -Path $setupCompletePath -Value "`r`n$setupCompleteSnippet" -Encoding ASCII
         Write-Output "Appended Wi-Fi auto-import snippet to existing $setupCompletePath."
     } else {

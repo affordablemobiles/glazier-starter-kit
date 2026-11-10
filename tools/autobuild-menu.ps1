@@ -1263,7 +1263,9 @@ function Start-GlazierDeploymentGUI {
             }
             if ((Get-Service -Name WlanSvc -ErrorAction SilentlyContinue).Status -eq 'Running') {
                 try {
-                    & netsh.exe wlan export profile key=clear folder="$wifiExportDir" | Out-Null
+                    if (Get-Command Export-GlazierHostWiFiProfiles -ErrorAction SilentlyContinue) {
+                        Export-GlazierHostWiFiProfiles -OutputDir $wifiExportDir
+                    }
                 } catch {}
             }
         } else {
@@ -1354,6 +1356,24 @@ function Start-GlazierDeploymentGUI {
                     $downloaded = $false
                 } finally {
                     if (Test-Path $tmpGuiPath) { Remove-Item $tmpGuiPath -Force -ErrorAction SilentlyContinue }
+                }
+
+                $remoteWifiUrl = "$($ConfigServer.TrimEnd('/'))/glazier-resources/GlazierWiFi.ps1"
+                $targetWifiPath = "X:\glazier-resources\GlazierWiFi.ps1"
+                $tmpWifiPath = "$env:TEMP\GlazierWiFi.ps1.tmp"
+                try {
+                    if (Test-Path $tmpWifiPath) { Remove-Item $tmpWifiPath -Force -ErrorAction SilentlyContinue }
+                    $wc = New-Object System.Net.WebClient
+                    $wc.DownloadFile($remoteWifiUrl, $tmpWifiPath)
+                    if ((Test-Path $tmpWifiPath) -and (Get-Item $tmpWifiPath).Length -gt 1024) {
+                        $dlWifiContent = Get-Content -Path $tmpWifiPath -Raw -ErrorAction SilentlyContinue
+                        if ($dlWifiContent -and $dlWifiContent -match 'GlazierNativeWlan') {
+                            Move-Item -Path $tmpWifiPath -Destination $targetWifiPath -Force
+                        }
+                    }
+                } catch {
+                } finally {
+                    if (Test-Path $tmpWifiPath) { Remove-Item $tmpWifiPath -Force -ErrorAction SilentlyContinue }
                 }
 
                 if (-not $downloaded) {

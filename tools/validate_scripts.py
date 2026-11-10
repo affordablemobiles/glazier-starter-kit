@@ -57,6 +57,10 @@ SYNCED_FILE_PAIRS = [
         'glazier-repo/glazier-resources/Stage-GlazierWifiProfiles.ps1',
     ),
     (
+        'glazier-repo/common/stage_wifi_profiles.ps1',
+        'glazier-resources/Stage-GlazierWifiProfiles.ps1',
+    ),
+    (
         'glazier-repo/menu/autobuild.ps1',
         'tools/autobuild-menu.ps1',
     ),

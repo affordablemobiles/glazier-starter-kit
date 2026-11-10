@@ -42,9 +42,26 @@ try {
             Move-Item -Path $tmpGuiPath -Destination $targetGuiPath -Force
         }
     }
+    $remoteWifiUrl = "$($config_server.TrimEnd('/'))/glazier-resources/GlazierWiFi.ps1"
+    $targetWifiPath = "$targetGuiDir\GlazierWiFi.ps1"
+    $tmpWifiPath = "$env:TEMP\GlazierWiFi.ps1.tmp"
+    if (Test-Path $tmpWifiPath) { Remove-Item $tmpWifiPath -Force -ErrorAction SilentlyContinue }
+    try {
+        $wc.DownloadFile($remoteWifiUrl, $tmpWifiPath)
+        if ((Test-Path $tmpWifiPath) -and (Get-Item $tmpWifiPath).Length -gt 1024) {
+            $wifiContent = Get-Content -Path $tmpWifiPath -Raw -ErrorAction SilentlyContinue
+            if ($wifiContent -and $wifiContent -match 'GlazierNativeWlan') {
+                Move-Item -Path $tmpWifiPath -Destination $targetWifiPath -Force
+            }
+        }
+    } catch {
+    } finally {
+        if (Test-Path $tmpWifiPath) { Remove-Item $tmpWifiPath -Force -ErrorAction SilentlyContinue }
+    }
 } catch {
 } finally {
     if (Test-Path $tmpGuiPath) { Remove-Item $tmpGuiPath -Force -ErrorAction SilentlyContinue }
+    if (Test-Path $tmpWifiPath) { Remove-Item $tmpWifiPath -Force -ErrorAction SilentlyContinue }
 }
 
 $guiCandidates = @(

@@ -34,6 +34,13 @@ public class GlazierNativeWlan {
         public int isState;
     }
 
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct WLAN_PROFILE_INFO {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
+        public string strProfileName;
+        public uint dwFlags;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     public struct DOT11_SSID {
         public uint uSSIDLength;
@@ -129,6 +136,23 @@ public class GlazierNativeWlan {
         IntPtr hClient,
         IntPtr pReserved,
         out IntPtr ppInterfaceList);
+
+    [DllImport("wlanapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern uint WlanGetProfileList(
+        IntPtr hClient,
+        ref Guid interfaceGuid,
+        IntPtr pReserved,
+        out IntPtr ppProfileList);
+
+    [DllImport("wlanapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern uint WlanGetProfile(
+        IntPtr hClient,
+        ref Guid interfaceGuid,
+        [MarshalAs(UnmanagedType.LPWStr)] string strProfileName,
+        IntPtr pReserved,
+        out IntPtr pstrProfileXml,
+        ref uint pdwFlags,
+        out uint pdwGrantedAccess);
 
     [DllImport("wlanapi.dll", SetLastError = true)]
     public static extern uint WlanScan(
@@ -410,6 +434,57 @@ public class GlazierNativeWlan {
         }
         return "";
     }
+
+    public static string[] GetProfilesXml(Guid interfaceGuid) {
+        IntPtr hClient = IntPtr.Zero;
+        IntPtr pList = IntPtr.Zero;
+        uint negVer = 0;
+        var result = new List<string>();
+
+        try {
+            uint ret = WlanOpenHandle(2, IntPtr.Zero, out negVer, out hClient);
+            if (ret != 0) return result.ToArray();
+
+            ret = WlanGetProfileList(hClient, ref interfaceGuid, IntPtr.Zero, out pList);
+            if (ret != 0 || pList == IntPtr.Zero) return result.ToArray();
+
+            uint count = (uint)Marshal.ReadInt32(pList);
+            int itemSize = Marshal.SizeOf(typeof(WLAN_PROFILE_INFO));
+            long basePtr = pList.ToInt64() + 8;
+
+            for (int i = 0; i < count; i++) {
+                IntPtr itemPtr = new IntPtr(basePtr + (i * itemSize));
+                var info = (WLAN_PROFILE_INFO)Marshal.PtrToStructure(itemPtr, typeof(WLAN_PROFILE_INFO));
+                if (string.IsNullOrEmpty(info.strProfileName)) continue;
+
+                IntPtr pXml = IntPtr.Zero;
+                uint flags = 4; // WLAN_PROFILE_GET_PLAINTEXT_KEY
+                uint grantedAccess = 0;
+                uint getRet = WlanGetProfile(hClient, ref interfaceGuid, info.strProfileName, IntPtr.Zero, out pXml, ref flags, out grantedAccess);
+                if (getRet != 0) {
+                    flags = 0;
+                    getRet = WlanGetProfile(hClient, ref interfaceGuid, info.strProfileName, IntPtr.Zero, out pXml, ref flags, out grantedAccess);
+                }
+
+                if (getRet == 0 && pXml != IntPtr.Zero) {
+                    try {
+                        string xml = Marshal.PtrToStringUni(pXml);
+                        if (!string.IsNullOrEmpty(xml)) {
+                            result.Add(xml);
+                        }
+                    } finally {
+                        WlanFreeMemory(pXml);
+                    }
+                }
+            }
+        } catch {
+        } finally {
+            if (pList != IntPtr.Zero) WlanFreeMemory(pList);
+            if (hClient != IntPtr.Zero) WlanCloseHandle(hClient, IntPtr.Zero);
+        }
+
+        return result.ToArray();
+    }
 }
 "@
 
@@ -524,6 +599,56 @@ $secXml
     </MSM>
 </WLANProfile>
 "@
+}
+
+function Export-GlazierHostWiFiProfiles {
+    param(
+        [string]$OutputDir = "C:\sources\wifi_profiles"
+    )
+
+    $wlanSvc = Get-Service -Name WlanSvc -ErrorAction SilentlyContinue
+    if ($wlanSvc -and $wlanSvc.Status -ne 'Running') {
+        Start-Service -Name WlanSvc -ErrorAction SilentlyContinue
+    }
+
+    if (-not (Test-Path $OutputDir)) {
+        New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+    }
+
+    $ifaces = [GlazierNativeWlan]::EnumInterfaces()
+    if (-not $ifaces -or $ifaces.Count -eq 0) {
+        return @()
+    }
+
+    $exportedFiles = @()
+    foreach ($iface in $ifaces) {
+        $xmlList = [GlazierNativeWlan]::GetProfilesXml($iface.InterfaceGuid)
+        foreach ($xmlStr in $xmlList) {
+            try {
+                [xml]$wx = $xmlStr
+                if (-not $wx -or -not $wx.WLANProfile) { continue }
+                $auth = [string]$wx.WLANProfile.MSM.security.authEncryption.authentication
+                $oneX = [string]$wx.WLANProfile.MSM.security.authEncryption.useOneX
+                if ($oneX -match '^(?i:true)$' -or ($auth -and $auth -notin @('WPAPSK', 'WPA2PSK', 'WPA3SAE', 'WPA', 'WPA2', 'open', 'OWE'))) {
+                    continue
+                }
+                $ssid = if ($wx.WLANProfile.SSIDConfig.SSID.name) { [string]$wx.WLANProfile.SSIDConfig.SSID.name } else { [string]$wx.WLANProfile.name }
+                if (-not $ssid) { continue }
+                $key = [string]$wx.WLANProfile.MSM.security.sharedKey.keyMaterial
+                $isHidden = ([string]$wx.WLANProfile.SSIDConfig.nonBroadcast -eq 'true')
+                if (-not $auth) {
+                    $auth = if ($key) { "WPA2PSK" } else { "open" }
+                }
+
+                $cleanXml = New-GlazierWiFiProfileXml -SSID $ssid -Password $key -AuthType $auth -IsHidden $isHidden
+                $safeFileName = ($ssid -replace '[\\/:*?"<>|]', '_')
+                $outPath = Join-Path $OutputDir "$safeFileName.xml"
+                Set-Content -Path $outPath -Value $cleanXml -Encoding ASCII -Force
+                $exportedFiles += $outPath
+            } catch {}
+        }
+    }
+    return $exportedFiles
 }
 
 function Test-GlazierInternetReachability {
@@ -920,11 +1045,24 @@ function Invoke-GlazierWiFiAutoConnect {
         try {
             $xmlContent = Get-Content -Path $pf.FullName -Raw -ErrorAction SilentlyContinue
             [xml]$px = $xmlContent
-            $pn = if ($px -and $px.WLANProfile) { $px.WLANProfile.name } else { $pf.BaseName }
-            if ($pn) {
+            if ($px -and $px.WLANProfile) {
+                $ssid = if ($px.WLANProfile.SSIDConfig.SSID.name) { [string]$px.WLANProfile.SSIDConfig.SSID.name } else { [string]$px.WLANProfile.name }
+                $auth = [string]$px.WLANProfile.MSM.security.authEncryption.authentication
+                if (-not $auth) { $auth = "WPA2PSK" }
+                $key = [string]$px.WLANProfile.MSM.security.sharedKey.keyMaterial
+                $isHidden = ([string]$px.WLANProfile.SSIDConfig.nonBroadcast -eq 'true')
+                $cleanXml = New-GlazierWiFiProfileXml -SSID $ssid -Password $key -AuthType $auth -IsHidden $isHidden
+                Set-Content -Path $pf.FullName -Value $cleanXml -Encoding ASCII -Force
                 $reasonCode = 0
-                [GlazierNativeWlan]::SetProfile($wlanIface.InterfaceGuid, $xmlContent, [ref]$reasonCode) | Out-Null
-                $profileNames += $pn
+                [GlazierNativeWlan]::SetProfile($wlanIface.InterfaceGuid, $cleanXml, [ref]$reasonCode) | Out-Null
+                $profileNames += $ssid
+            } else {
+                $pn = $pf.BaseName
+                if ($pn) {
+                    $reasonCode = 0
+                    [GlazierNativeWlan]::SetProfile($wlanIface.InterfaceGuid, $xmlContent, [ref]$reasonCode) | Out-Null
+                    $profileNames += $pn
+                }
             }
         } catch {}
     }
@@ -1682,7 +1820,9 @@ function Show-GlazierNetworkGUI {
             if (-not (Test-Path $wifiExportDir)) {
                 New-Item -ItemType Directory -Path $wifiExportDir -Force | Out-Null
             }
-            & netsh.exe wlan export profile key=clear folder="$wifiExportDir" | Out-Null
+            if (Get-Command Export-GlazierHostWiFiProfiles -ErrorAction SilentlyContinue) {
+                Export-GlazierHostWiFiProfiles -OutputDir $wifiExportDir
+            }
         } catch {}
     }
 

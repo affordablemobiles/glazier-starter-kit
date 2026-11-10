@@ -362,7 +362,9 @@ try {
             if (-not (Test-Path $wifiExportDir)) {
                 New-Item -ItemType Directory -Path $wifiExportDir -Force | Out-Null
             }
-            & netsh.exe wlan export profile key=clear folder="$wifiExportDir" | Out-Null
+            if (Get-Command Export-GlazierHostWiFiProfiles -ErrorAction SilentlyContinue) {
+                Export-GlazierHostWiFiProfiles -OutputDir $wifiExportDir
+            }
             $expProfiles = Get-ChildItem -Path $wifiExportDir -Filter "*.xml" -ErrorAction SilentlyContinue
             if ($expProfiles) {
                 Add-Log -Message "Exported $($expProfiles.Count) Wi-Fi profile(s) for carry-over to installed Windows OS."
